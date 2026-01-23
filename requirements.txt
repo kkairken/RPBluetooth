@@ -9,13 +9,22 @@ onnxruntime>=1.15.0
 # Configuration
 PyYAML>=6.0
 
-# BLE support (optional - for production BLE implementation)
-# bleak>=0.20.0
-# bluezero>=0.7.0
+# BLE GATT Server support (for real BLE server on Raspberry Pi)
+# NOTE: dbus-python and PyGObject are difficult to install via pip
+# RECOMMENDED: Use system packages instead:
+#   sudo apt install python3-dbus python3-gi
+# If you must use pip (requires system dependencies):
+dbus-python>=1.3.2
+PyGObject>=3.42.0
+
+# BLE Client support (optional - for ble_register_client.py)
+bleak>=0.20.0
 
 # GPIO support (Raspberry Pi only) - using libgpiod (modern interface)
-# Note: Install system package first: sudo apt install python3-libgpiod
-# Or for pip: libgpiod>=2.0.0 (requires libgpiod-dev)
+# RECOMMENDED: Use system package:
+#   sudo apt install python3-libgpiod
+# If you must use pip (requires libgpiod-dev):
+# libgpiod>=2.0.0
 
 # Testing
 pytest>=7.4.0
