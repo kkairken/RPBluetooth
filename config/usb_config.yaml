@@ -1,0 +1,72 @@
+# Configuration for USB camera mode
+# Offline face access control system for Raspberry Pi 3
+
+# Camera configuration
+camera:
+  type: usb
+  device_id: 0  # USB camera device ID (usually 0)
+  width: 640
+  height: 480
+  fps: 15
+
+# Face recognition configuration
+face:
+  # Path to InsightFace ONNX model
+  # Download model and place in models/ directory
+  onnx_model_path: "models/insightface_medium.onnx"
+
+  # Detector type: opencv_haar, mediapipe, or none
+  detector_type: opencv_haar
+  detector_scale_factor: 1.1
+  detector_min_neighbors: 5
+  detector_min_face_size: [60, 60]
+
+  # Embedding settings
+  embedding_dim: 512
+  similarity_threshold: 0.6  # Cosine similarity threshold (0-1)
+
+  # Quality checks
+  quality_min_face_size: 80
+  quality_blur_threshold: 100.0
+  align_enabled: true
+
+# BLE GATT server configuration
+ble:
+  device_name: "RP3_FaceAccess"
+  service_uuid: "12345678-1234-5678-1234-56789abcdef0"
+  command_char_uuid: "12345678-1234-5678-1234-56789abcdef1"
+  response_char_uuid: "12345678-1234-5678-1234-56789abcdef2"
+  photo_chunk_size: 512
+  max_photo_size: 5242880  # 5 MB
+
+  # HMAC authentication
+  hmac_enabled: true
+  shared_secret: "change_this_secret_key_in_production"
+
+# Access control settings
+access:
+  # Admin mode: enable to allow employee registration
+  # Set to true during development, or use GPIO button in production
+  admin_mode_enabled: true
+
+  # Optional GPIO pin for admin mode button (BCM numbering)
+  # admin_gpio_pin: 23
+
+  # Lock control
+  unlock_duration_sec: 3.0
+  cooldown_sec: 2.0
+  max_attempts_per_minute: 10
+
+# Lock GPIO configuration (using libgpiod)
+lock:
+  gpio_pin: 17  # GPIO line number (BCM numbering)
+  gpio_chip: "gpiochip0"  # GPIO chip device name
+  active_high: true  # true if relay activates on HIGH, false for LOW
+  mock_mode: false  # Set to true for testing without GPIO
+
+# Database configuration
+database:
+  path: "data/access_control.db"
+
+# Logging level: DEBUG, INFO, WARNING, ERROR
+log_level: INFO

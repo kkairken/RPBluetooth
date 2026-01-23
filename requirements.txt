@@ -1,0 +1,25 @@
+# Core dependencies
+numpy>=1.23.0,<2.0.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# ONNX Runtime for face recognition
+onnxruntime>=1.15.0
+
+# Configuration
+PyYAML>=6.0
+
+# BLE support (optional - for production BLE implementation)
+# bleak>=0.20.0
+# bluezero>=0.7.0
+
+# GPIO support (Raspberry Pi only) - using libgpiod (modern interface)
+# Note: Install system package first: sudo apt install python3-libgpiod
+# Or for pip: libgpiod>=2.0.0 (requires libgpiod-dev)
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Optional: MediaPipe for face detection
+# mediapipe>=0.10.0
