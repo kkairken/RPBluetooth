@@ -215,16 +215,39 @@ class CommandCharacteristic(Characteristic):
         )
         self.protocol = protocol
         self.response_chrc = response_chrc
+        self._rx_buffer = bytearray()
+        self._max_command_size = 16 * 1024
 
     def WriteValue(self, value, options):
         """Handle incoming command"""
         try:
-            # Convert bytes to string
-            command_str = bytes(value).decode('utf-8')
-            logger.info(f"Received command: {command_str[:100]}...")
+            offset = int(options.get('offset', 0))
 
-            # Parse JSON command
-            command = json.loads(command_str)
+            if offset == 0:
+                self._rx_buffer = bytearray()
+
+            self._rx_buffer.extend(bytes(value))
+
+            if len(self._rx_buffer) > self._max_command_size:
+                logger.error("Command buffer too large, resetting")
+                self._rx_buffer = bytearray()
+                error_response = {'type': 'ERROR', 'message': 'Command too large'}
+                self.response_chrc.send_notification(json.dumps(error_response))
+                return
+
+            # Try to parse JSON; if incomplete, wait for more fragments.
+            try:
+                command_str = self._rx_buffer.decode('utf-8')
+                command = json.loads(command_str)
+            except json.JSONDecodeError:
+                return
+            except UnicodeDecodeError:
+                return
+
+            # Clear buffer on successful parse
+            self._rx_buffer = bytearray()
+
+            logger.info(f"Received command: {command_str[:100]}...")
             command_type = command.get('command')
 
             # Process command
