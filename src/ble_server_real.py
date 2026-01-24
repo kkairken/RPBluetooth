@@ -221,7 +221,7 @@ class CommandCharacteristic(Characteristic):
     └─────────────────┴──────────────┴─────────────────────┘
     """
     HEADER_SIZE = 3  # 2 bytes length (big-endian) + 1 byte sequence
-    RX_TIMEOUT_MS = 5000  # Reset buffer if no data for 5 seconds
+    RX_TIMEOUT_MS = 10000  # Reset buffer if no data for 10 seconds
 
     def __init__(self, bus, index, service, protocol: BLEProtocol, response_chrc):
         Characteristic.__init__(
@@ -351,8 +351,7 @@ class CommandCharacteristic(Characteristic):
             # Process command
             response = self.process_command(command_type, command)
 
-            # Send response via notification (only if response is not None)
-            # PHOTO_CHUNK returns None for intermediate chunks (streaming mode)
+            # Send response via notification
             if response is not None:
                 response_json = json.dumps(response)
                 self.response_chrc.send_notification(response_json)
