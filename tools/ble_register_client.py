@@ -40,6 +40,7 @@ RESPONSE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
 
 # Параметры
 CHUNK_SIZE = 60
+SLEEP_BETWEEN_CHUNKS_MS = 20
 DEVICE_NAME = "RP3_FaceAccess"
 
 
@@ -145,7 +146,7 @@ class BLERegistrationClient:
             print(f"❌ Ошибка: {response.get('message') if response else 'No response'}")
             return False
 
-    async def send_photo(self, photo_path: str, photo_index: int):
+    async def send_photo(self, photo_path: str, photo_index: int, chunk_size: int, sleep_ms: int):
         """Отправка фотографии чанками"""
         print(f"\n{'='*60}")
         print(f"📸 Отправка фото {photo_index}: {photo_path}")
@@ -161,7 +162,7 @@ class BLERegistrationClient:
         photo_b64 = base64.b64encode(photo_data).decode('utf-8')
 
         # Разбивка на чанки
-        chunks = [photo_b64[i:i+CHUNK_SIZE] for i in range(0, len(photo_b64), CHUNK_SIZE)]
+        chunks = [photo_b64[i:i+chunk_size] for i in range(0, len(photo_b64), chunk_size)]
         total_chunks = len(chunks)
 
         print(f"   Чанков: {total_chunks}")
@@ -202,6 +203,9 @@ class BLERegistrationClient:
             if is_last and response.get('type') == 'OK':
                 print(f"\n   ✅ Фото {photo_index} отправлено ({response.get('photos_received')}/{response.get('photos_total')})")
 
+            if sleep_ms > 0:
+                await asyncio.sleep(sleep_ms / 1000.0)
+
         return True
 
     async def end_upsert(self):
@@ -223,7 +227,9 @@ class BLERegistrationClient:
 
     async def register_employee(self, employee_id: str, display_name: str,
                                access_start: str, access_end: str,
-                               photo_paths: List[str]):
+                               photo_paths: List[str],
+                               chunk_size: int,
+                               sleep_ms: int):
         """Полная регистрация сотрудника"""
         try:
             # 1. BEGIN_UPSERT
@@ -237,7 +243,7 @@ class BLERegistrationClient:
 
             # 2. Отправка фотографий
             for i, photo_path in enumerate(photo_paths, 1):
-                success = await self.send_photo(photo_path, i)
+                success = await self.send_photo(photo_path, i, chunk_size=chunk_size, sleep_ms=sleep_ms)
                 if not success:
                     return False
 
@@ -306,6 +312,8 @@ async def main():
     parser.add_argument('--photos', nargs='+', required=True, help='Пути к фотографиям')
     parser.add_argument('--secret', required=True, help='Shared secret для HMAC')
     parser.add_argument('--device-name', default=DEVICE_NAME, help=f'Имя BLE устройства (по умолчанию: {DEVICE_NAME})')
+    parser.add_argument('--chunk-size', type=int, default=CHUNK_SIZE, help=f'Размер чанка (по умолчанию: {CHUNK_SIZE})')
+    parser.add_argument('--sleep-ms', type=int, default=SLEEP_BETWEEN_CHUNKS_MS, help=f'Пауза между чанками в мс (по умолчанию: {SLEEP_BETWEEN_CHUNKS_MS})')
 
     args = parser.parse_args()
 
@@ -344,7 +352,9 @@ async def main():
             args.display_name,
             args.access_start,
             args.access_end,
-            args.photos
+            args.photos,
+            chunk_size=args.chunk_size,
+            sleep_ms=args.sleep_ms
         )
 
         if success:
