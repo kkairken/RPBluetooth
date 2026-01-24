@@ -48,11 +48,11 @@ RESPONSE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
 # Protocol constants
 HEADER_SIZE = 3  # 2 bytes length + 1 byte sequence
 
-# Параметры - ОЧЕНЬ консервативные для диагностики
-CHUNK_SIZE = 256  # Маленькие чанки - меньше BLE пакетов
+# Параметры - ОДИН BLE пакет на команду для диагностики
+CHUNK_SIZE = 80  # ~170 байт команда = 1 BLE пакет (MTU 182)
 DEFAULT_MTU = 185
-SLEEP_BETWEEN_CHUNKS_MS = 150  # Большая пауза между командами
-INTER_PACKET_DELAY_MS = 30  # Большая пауза между BLE пакетами
+SLEEP_BETWEEN_CHUNKS_MS = 100
+INTER_PACKET_DELAY_MS = 30
 DEVICE_NAME = "RP3_FaceAccess"
 MAX_RETRIES = 3
 

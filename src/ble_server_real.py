@@ -273,7 +273,9 @@ class CommandCharacteristic(Characteristic):
         """Handle incoming data with length-prefixed framing"""
         try:
             self._reset_timeout()
-            self._rx_buffer.extend(bytes(value))
+            incoming = bytes(value)
+            logger.info(f"WriteValue: received {len(incoming)} bytes, buffer was {len(self._rx_buffer)} bytes, state={self._rx_state.name}")
+            self._rx_buffer.extend(incoming)
 
             # Process all complete messages in buffer
             while True:
@@ -318,7 +320,7 @@ class CommandCharacteristic(Characteristic):
                     self._last_seq = seq
                     self._rx_buffer = self._rx_buffer[self.HEADER_SIZE:]
                     self._rx_state = RxState.WAIT_PAYLOAD
-                    logger.debug(f"Header: len={self._expected_len}, seq={seq}")
+                    logger.info(f"Header parsed: expected_len={self._expected_len}, seq={seq}, buffer_now={len(self._rx_buffer)}")
 
                 if self._rx_state == RxState.WAIT_PAYLOAD:
                     if len(self._rx_buffer) < self._expected_len:
@@ -342,11 +344,14 @@ class CommandCharacteristic(Characteristic):
     def _process_message(self, payload: bytes):
         """Process a complete message payload"""
         try:
+            logger.info(f"Processing payload: {len(payload)} bytes")
+            logger.debug(f"Payload hex: {payload[:50].hex()}...")
+
             command_str = payload.decode('utf-8')
             command = json.loads(command_str)
 
             command_type = command.get('command')
-            logger.debug(f"Received command: {command_type}")
+            logger.info(f"Received command: {command_type}")
 
             # Process command
             response = self.process_command(command_type, command)
