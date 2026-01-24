@@ -345,15 +345,17 @@ class CommandCharacteristic(Characteristic):
             command_str = payload.decode('utf-8')
             command = json.loads(command_str)
 
-            logger.info(f"Received command: {command_str[:100]}...")
             command_type = command.get('command')
+            logger.debug(f"Received command: {command_type}")
 
             # Process command
             response = self.process_command(command_type, command)
 
-            # Send response via notification
-            response_json = json.dumps(response)
-            self.response_chrc.send_notification(response_json)
+            # Send response via notification (only if response is not None)
+            # PHOTO_CHUNK returns None for intermediate chunks (streaming mode)
+            if response is not None:
+                response_json = json.dumps(response)
+                self.response_chrc.send_notification(response_json)
 
         except json.JSONDecodeError as e:
             # Log first bytes for debugging
@@ -371,8 +373,8 @@ class CommandCharacteristic(Characteristic):
             error_response = {'type': 'ERROR', 'message': 'Invalid encoding'}
             self.response_chrc.send_notification(json.dumps(error_response))
 
-    def process_command(self, command_type: str, command: Dict[str, Any]) -> Dict[str, Any]:
-        """Process BLE command"""
+    def process_command(self, command_type: str, command: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Process BLE command. Returns None for commands that don't need response."""
         if command_type == self.protocol.CMD_BEGIN_UPSERT:
             return self.protocol.handle_begin_upsert(command)
 
