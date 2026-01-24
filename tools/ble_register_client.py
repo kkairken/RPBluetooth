@@ -49,11 +49,12 @@ RESPONSE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
 HEADER_SIZE = 3  # 2 bytes length + 1 byte sequence
 
 # Параметры
-CHUNK_SIZE = 512  # Base64 chunk size for photo data
+CHUNK_SIZE = 4096  # Base64 chunk size for photo data (larger = fewer BLE commands)
 DEFAULT_MTU = 185  # Conservative MTU (most devices support 185+)
-SLEEP_BETWEEN_CHUNKS_MS = 50  # Increased for stability
+SLEEP_BETWEEN_CHUNKS_MS = 150  # Pause between commands for BlueZ stability
 DEVICE_NAME = "RP3_FaceAccess"
 MAX_RETRIES = 3  # Retry count for failed writes
+FLUSH_EVERY_N_CHUNKS = 10  # Extra pause every N chunks
 
 
 class BLERegistrationClient:
@@ -89,13 +90,22 @@ class BLERegistrationClient:
                 return False
         return True
 
-    def generate_hmac(self, command: dict) -> str:
-        """Генерация HMAC подписи для команды"""
-        # Добавляем nonce
-        command['nonce'] = f"{int(time.time())}_{os.urandom(8).hex()}"
+    def generate_hmac(self, command: dict) -> tuple[str, str]:
+        """
+        Генерация HMAC подписи для команды.
+
+        Returns:
+            tuple: (hmac_signature, nonce) - оба должны быть добавлены в команду
+        """
+        # Генерируем nonce
+        nonce = f"{int(time.time())}_{os.urandom(8).hex()}"
+
+        # Создаём копию с nonce для подписи
+        command_with_nonce = command.copy()
+        command_with_nonce['nonce'] = nonce
 
         # Сортируем ключи и сериализуем
-        message = json.dumps(command, sort_keys=True).encode('utf-8')
+        message = json.dumps(command_with_nonce, sort_keys=True).encode('utf-8')
 
         # Вычисляем HMAC
         signature = hmac.new(
@@ -104,7 +114,7 @@ class BLERegistrationClient:
             hashlib.sha256
         ).hexdigest()
 
-        return signature
+        return signature, nonce
 
     def notification_handler(self, sender, data):
         """Обработчик уведомлений от сервера"""
@@ -230,8 +240,10 @@ class BLERegistrationClient:
             "num_photos": num_photos
         }
 
-        # Добавляем HMAC
-        command['hmac'] = self.generate_hmac(command.copy())
+        # Генерируем HMAC и nonce
+        hmac_sig, nonce = self.generate_hmac(command)
+        command['nonce'] = nonce
+        command['hmac'] = hmac_sig
 
         await self.send_command(command)
         response = await self.wait_for_response()
@@ -306,6 +318,10 @@ class BLERegistrationClient:
             # Additional delay between photo chunks for stability
             if not is_last:
                 await asyncio.sleep(sleep_ms / 1000.0)
+
+                # Extra flush pause every N chunks to let BlueZ catch up
+                if (i + 1) % FLUSH_EVERY_N_CHUNKS == 0:
+                    await asyncio.sleep(0.3)  # 300ms extra pause
 
         return True
 
