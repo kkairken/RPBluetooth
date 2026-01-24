@@ -1,6 +1,7 @@
 """
 Lock controller module.
 Controls door lock via GPIO relay using libgpiod (modern GPIO interface).
+Supports both libgpiod v1.x and v2.x APIs.
 """
 import logging
 import time
@@ -36,9 +37,12 @@ class LockController:
         self.unlock_duration = unlock_duration
         self.gpio_chip_name = gpio_chip
 
-        # gpiod objects
+        # gpiod objects (for v1.x)
         self.chip = None
         self.line = None
+        # gpiod objects (for v2.x)
+        self._request = None
+        self._gpiod_version = None
         self.gpio_initialized = False
 
         if not mock_mode:
@@ -46,32 +50,39 @@ class LockController:
         else:
             logger.info("Lock controller in MOCK mode (no actual GPIO)")
 
+    def _detect_gpiod_version(self, gpiod) -> int:
+        """Detect libgpiod version (1 or 2)."""
+        # v2.x has 'request_lines' on Chip, v1.x has 'get_line'
+        if hasattr(gpiod, 'Chip'):
+            # Check if Chip has get_line (v1) or request_lines (v2)
+            chip_class = gpiod.Chip
+            if hasattr(chip_class, 'request_lines') or hasattr(gpiod, 'LineSettings'):
+                return 2
+            else:
+                return 1
+        return 1
+
     def _init_gpio(self):
-        """Initialize GPIO using libgpiod."""
+        """Initialize GPIO using libgpiod (auto-detects v1.x or v2.x)."""
         try:
             import gpiod
             self.gpiod = gpiod
 
-            # Open GPIO chip
-            self.chip = gpiod.Chip(self.gpio_chip_name)
+            self._gpiod_version = self._detect_gpiod_version(gpiod)
+            logger.info(f"Detected libgpiod version: {self._gpiod_version}.x")
 
-            # Get GPIO line
-            self.line = self.chip.get_line(self.gpio_pin)
-
-            # Request line as output
-            self.line.request(
-                consumer="face_access_lock",
-                type=gpiod.LINE_REQ_DIR_OUT,
-                default_vals=[0]  # Start with 0 (locked)
-            )
+            if self._gpiod_version == 2:
+                self._init_gpio_v2(gpiod)
+            else:
+                self._init_gpio_v1(gpiod)
 
             # Initialize to locked state
             self._set_lock_state(False)
 
             self.gpio_initialized = True
             logger.info(
-                f"GPIO initialized via libgpiod: chip={self.gpio_chip_name}, "
-                f"line={self.gpio_pin}, active_high={self.active_high}"
+                f"GPIO initialized via libgpiod v{self._gpiod_version}: "
+                f"chip={self.gpio_chip_name}, line={self.gpio_pin}, active_high={self.active_high}"
             )
 
         except ImportError:
@@ -88,9 +99,42 @@ class LockController:
             logger.warning("Switching to mock mode")
             self.mock_mode = True
         except Exception as e:
-            logger.error(f"GPIO initialization failed: {e}")
+            logger.error(f"GPIO initialization failed: {type(e).__name__}: {e}")
             logger.warning("Switching to mock mode")
             self.mock_mode = True
+
+    def _init_gpio_v1(self, gpiod):
+        """Initialize GPIO using libgpiod v1.x API."""
+        # Open GPIO chip
+        self.chip = gpiod.Chip(self.gpio_chip_name)
+
+        # Get GPIO line
+        self.line = self.chip.get_line(self.gpio_pin)
+
+        # Request line as output
+        self.line.request(
+            consumer="face_access_lock",
+            type=gpiod.LINE_REQ_DIR_OUT,
+            default_vals=[0]  # Start with 0 (locked)
+        )
+
+    def _init_gpio_v2(self, gpiod):
+        """Initialize GPIO using libgpiod v2.x API."""
+        # In v2.x, we use request_lines() instead of get_line()
+        chip_path = f"/dev/{self.gpio_chip_name}"
+
+        # Create line settings for output
+        settings = gpiod.LineSettings(
+            direction=gpiod.line.Direction.OUTPUT,
+            output_value=gpiod.line.Value.INACTIVE
+        )
+
+        # Request the line
+        self._request = gpiod.request_lines(
+            chip_path,
+            consumer="face_access_lock",
+            config={self.gpio_pin: settings}
+        )
 
     def _set_lock_state(self, unlock: bool):
         """
@@ -111,8 +155,14 @@ class LockController:
             else:
                 gpio_value = 0 if unlock else 1
 
-            # Set GPIO line value
-            self.line.set_value(gpio_value)
+            # Set GPIO line value based on version
+            if self._gpiod_version == 2:
+                # v2.x API
+                value = self.gpiod.line.Value.ACTIVE if gpio_value else self.gpiod.line.Value.INACTIVE
+                self._request.set_value(self.gpio_pin, value)
+            else:
+                # v1.x API
+                self.line.set_value(gpio_value)
 
             state_str = "UNLOCKED" if unlock else "LOCKED"
             logger.info(
@@ -158,15 +208,23 @@ class LockController:
                 # Ensure locked state before cleanup
                 self._set_lock_state(False)
 
-                # Release GPIO line
-                if self.line:
-                    self.line.release()
-                    logger.info("GPIO line released")
+                if self._gpiod_version == 2:
+                    # v2.x API - release request
+                    if self._request:
+                        self._request.release()
+                        self._request = None
+                        logger.info("GPIO request released (v2)")
+                else:
+                    # v1.x API
+                    # Release GPIO line
+                    if self.line:
+                        self.line.release()
+                        logger.info("GPIO line released")
 
-                # Close chip
-                if self.chip:
-                    self.chip.close()
-                    logger.info("GPIO chip closed")
+                    # Close chip
+                    if self.chip:
+                        self.chip.close()
+                        logger.info("GPIO chip closed")
 
             except Exception as e:
                 logger.error(f"GPIO cleanup error: {e}")
