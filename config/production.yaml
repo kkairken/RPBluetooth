@@ -1,0 +1,53 @@
+# Production configuration for RP3 Face Access Control
+# Optimized for stability and security
+
+camera:
+  type: usb
+  device_id: 0
+  width: 640
+  height: 480
+  fps: 15
+
+face:
+  onnx_model_path: "/home/hseadmin/RPBluetooth/models/insightface_medium.onnx"
+  detector_type: opencv_haar
+  detector_scale_factor: 1.1
+  detector_min_neighbors: 5
+  detector_min_face_size: [60, 60]
+  embedding_dim: 512
+  similarity_threshold: 0.6
+  quality_min_face_size: 80
+  quality_blur_threshold: 100.0
+  align_enabled: true
+
+ble:
+  device_name: "RP3_FaceAccess"
+  service_uuid: "12345678-1234-5678-1234-56789abcdef0"
+  command_char_uuid: "12345678-1234-5678-1234-56789abcdef1"
+  response_char_uuid: "12345678-1234-5678-1234-56789abcdef2"
+  photo_chunk_size: 512
+  max_photo_size: 5242880
+  hmac_enabled: true
+  # IMPORTANT: Change this secret in production!
+  shared_secret: "CHANGE_THIS_TO_A_SECURE_RANDOM_STRING"
+  use_real_ble: true
+
+access:
+  admin_mode_enabled: true
+  unlock_duration_sec: 3.0
+  cooldown_sec: 2.0
+  max_attempts_per_minute: 10
+
+lock:
+  gpio_pin: 17
+  gpio_chip: "gpiochip0"
+  active_high: true
+  mock_mode: false
+  button_pin: 27
+  button_active_low: true
+  button_debounce_ms: 50
+
+database:
+  path: "/home/hseadmin/RPBluetooth/data/access_control.db"
+
+log_level: INFO
