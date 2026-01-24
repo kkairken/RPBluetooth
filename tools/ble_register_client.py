@@ -39,7 +39,7 @@ COMMAND_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
 RESPONSE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
 
 # Параметры
-CHUNK_SIZE = 512
+CHUNK_SIZE = 60
 DEVICE_NAME = "RP3_FaceAccess"
 
 
@@ -114,7 +114,7 @@ class BLERegistrationClient:
         command_bytes = command_json.encode('utf-8')
 
         print(f"📤 Отправка: {command.get('command')} ({len(command_bytes)} байт)")
-        await self.client.write_gatt_char(COMMAND_CHAR_UUID, command_bytes)
+        await self.client.write_gatt_char(COMMAND_CHAR_UUID, command_bytes, response=True)
 
     async def begin_upsert(self, employee_id: str, display_name: str,
                           access_start: str, access_end: str, num_photos: int):
