@@ -6,15 +6,23 @@ Works on Linux (Raspberry Pi) with BlueZ 5.50+.
 import asyncio
 import logging
 import json
+import struct
 import dbus
 import dbus.service
 import dbus.mainloop.glib
 from typing import Optional, Dict, Any, Callable
+from enum import IntEnum
 from gi.repository import GLib
 
 from ble_server import BLEProtocol
 
 logger = logging.getLogger(__name__)
+
+
+class RxState(IntEnum):
+    """State machine for receiving fragmented messages"""
+    WAIT_HEADER = 0
+    WAIT_PAYLOAD = 1
 
 # DBus paths and interfaces
 BLUEZ_SERVICE_NAME = 'org.bluez'
@@ -204,8 +212,17 @@ class Characteristic(dbus.service.Object):
 class CommandCharacteristic(Characteristic):
     """
     Command characteristic (Write)
-    Receives commands from BLE client
+    Receives commands from BLE client.
+
+    Protocol: Length-prefixed framing
+    ┌─────────────────┬──────────────┬─────────────────────┐
+    │ Total Length    │ Sequence #   │ Payload (JSON)      │
+    │ 2 bytes BE      │ 1 byte       │ N bytes             │
+    └─────────────────┴──────────────┴─────────────────────┘
     """
+    HEADER_SIZE = 3  # 2 bytes length (big-endian) + 1 byte sequence
+    RX_TIMEOUT_MS = 5000  # Reset buffer if no data for 5 seconds
+
     def __init__(self, bus, index, service, protocol: BLEProtocol, response_chrc):
         Characteristic.__init__(
             self, bus, index,
@@ -216,36 +233,93 @@ class CommandCharacteristic(Characteristic):
         self.protocol = protocol
         self.response_chrc = response_chrc
         self._rx_buffer = bytearray()
-        self._max_command_size = 16 * 1024
+        self._rx_state = RxState.WAIT_HEADER
+        self._expected_len = 0
+        self._last_seq = -1
+        self._timeout_handle = None
+        self._max_command_size = 64 * 1024  # 64KB max
+
+    def _reset_timeout(self):
+        """Reset inactivity timeout - clears buffer if no data arrives"""
+        if self._timeout_handle:
+            GLib.source_remove(self._timeout_handle)
+        self._timeout_handle = GLib.timeout_add(
+            self.RX_TIMEOUT_MS,
+            self._on_timeout
+        )
+
+    def _on_timeout(self):
+        """Called when no data received for RX_TIMEOUT_MS"""
+        if len(self._rx_buffer) > 0:
+            logger.warning(f"RX timeout, discarding {len(self._rx_buffer)} bytes")
+        self._rx_buffer = bytearray()
+        self._rx_state = RxState.WAIT_HEADER
+        self._expected_len = 0
+        self._timeout_handle = None
+        return False  # Don't repeat
 
     def WriteValue(self, value, options):
-        """Handle incoming command"""
+        """Handle incoming data with length-prefixed framing"""
         try:
-            offset = int(options.get('offset', 0))
-
-            if offset == 0:
-                self._rx_buffer = bytearray()
-
+            self._reset_timeout()
             self._rx_buffer.extend(bytes(value))
 
-            if len(self._rx_buffer) > self._max_command_size:
-                logger.error("Command buffer too large, resetting")
-                self._rx_buffer = bytearray()
-                error_response = {'type': 'ERROR', 'message': 'Command too large'}
-                self.response_chrc.send_notification(json.dumps(error_response))
-                return
+            # Process all complete messages in buffer
+            while True:
+                if self._rx_state == RxState.WAIT_HEADER:
+                    if len(self._rx_buffer) < self.HEADER_SIZE:
+                        return  # Wait for more header bytes
 
-            # Try to parse JSON; if incomplete, wait for more fragments.
-            try:
-                command_str = self._rx_buffer.decode('utf-8')
-                command = json.loads(command_str)
-            except json.JSONDecodeError:
-                return
-            except UnicodeDecodeError:
-                return
+                    # Parse header: 2 bytes length (BE) + 1 byte sequence
+                    self._expected_len, seq = struct.unpack(
+                        '>HB',
+                        self._rx_buffer[:self.HEADER_SIZE]
+                    )
 
-            # Clear buffer on successful parse
+                    # Validate length
+                    if self._expected_len > self._max_command_size:
+                        logger.error(f"Message too large: {self._expected_len} bytes")
+                        self._rx_buffer = bytearray()
+                        self._rx_state = RxState.WAIT_HEADER
+                        error_response = {'type': 'ERROR', 'message': 'Command too large'}
+                        self.response_chrc.send_notification(json.dumps(error_response))
+                        return
+
+                    # Check for duplicate (same sequence number)
+                    if seq == self._last_seq:
+                        logger.debug(f"Duplicate message seq={seq}, ignoring")
+                        self._rx_buffer = self._rx_buffer[self.HEADER_SIZE + self._expected_len:]
+                        continue
+
+                    self._last_seq = seq
+                    self._rx_buffer = self._rx_buffer[self.HEADER_SIZE:]
+                    self._rx_state = RxState.WAIT_PAYLOAD
+                    logger.debug(f"Header: len={self._expected_len}, seq={seq}")
+
+                if self._rx_state == RxState.WAIT_PAYLOAD:
+                    if len(self._rx_buffer) < self._expected_len:
+                        return  # Wait for more payload bytes
+
+                    # Extract complete payload
+                    payload = bytes(self._rx_buffer[:self._expected_len])
+                    self._rx_buffer = self._rx_buffer[self._expected_len:]
+                    self._rx_state = RxState.WAIT_HEADER
+
+                    # Process the message
+                    self._process_message(payload)
+
+        except Exception as e:
+            logger.error(f"WriteValue error: {e}")
             self._rx_buffer = bytearray()
+            self._rx_state = RxState.WAIT_HEADER
+            error_response = {'type': 'ERROR', 'message': str(e)}
+            self.response_chrc.send_notification(json.dumps(error_response))
+
+    def _process_message(self, payload: bytes):
+        """Process a complete message payload"""
+        try:
+            command_str = payload.decode('utf-8')
+            command = json.loads(command_str)
 
             logger.info(f"Received command: {command_str[:100]}...")
             command_type = command.get('command')
@@ -259,11 +333,11 @@ class CommandCharacteristic(Characteristic):
 
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON: {e}")
-            error_response = {'type': 'ERROR', 'message': 'Invalid JSON'}
+            error_response = {'type': 'ERROR', 'message': f'Invalid JSON: {e}'}
             self.response_chrc.send_notification(json.dumps(error_response))
-        except Exception as e:
-            logger.error(f"Command processing error: {e}")
-            error_response = {'type': 'ERROR', 'message': str(e)}
+        except UnicodeDecodeError as e:
+            logger.error(f"Invalid UTF-8: {e}")
+            error_response = {'type': 'ERROR', 'message': 'Invalid encoding'}
             self.response_chrc.send_notification(json.dumps(error_response))
 
     def process_command(self, command_type: str, command: Dict[str, Any]) -> Dict[str, Any]:

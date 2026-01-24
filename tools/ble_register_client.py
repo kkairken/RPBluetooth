@@ -14,12 +14,19 @@ BLE клиент для регистрации сотрудников через
         --access-end "2026-12-31T23:59:59Z" \
         --photos photo1.jpg photo2.jpg \
         --secret "your_shared_secret"
+
+Protocol: Length-prefixed framing
+┌─────────────────┬──────────────┬─────────────────────┐
+│ Total Length    │ Sequence #   │ Payload (JSON)      │
+│ 2 bytes BE      │ 1 byte       │ N bytes             │
+└─────────────────┴──────────────┴─────────────────────┘
 """
 import asyncio
 import argparse
 import json
 import hmac
 import hashlib
+import struct
 import time
 import os
 import base64
@@ -38,21 +45,49 @@ SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
 COMMAND_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
 RESPONSE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
 
+# Protocol constants
+HEADER_SIZE = 3  # 2 bytes length + 1 byte sequence
+
 # Параметры
-CHUNK_SIZE = 60
-SLEEP_BETWEEN_CHUNKS_MS = 20
+CHUNK_SIZE = 512  # Base64 chunk size for photo data
+DEFAULT_MTU = 185  # Conservative MTU (most devices support 185+)
+SLEEP_BETWEEN_CHUNKS_MS = 50  # Increased for stability
 DEVICE_NAME = "RP3_FaceAccess"
+MAX_RETRIES = 3  # Retry count for failed writes
 
 
 class BLERegistrationClient:
     """BLE клиент для регистрации сотрудников"""
 
-    def __init__(self, device_address: str, shared_secret: str):
+    def __init__(self, device_address: str, shared_secret: str, mtu: int = DEFAULT_MTU):
         self.device_address = device_address
         self.shared_secret = shared_secret
         self.client: Optional[BleakClient] = None
         self.last_response = None
         self.response_event = asyncio.Event()
+        self._seq = 0  # Sequence number for framing protocol
+        self._mtu = mtu
+        self._write_chunk_size = mtu - 3  # ATT header overhead
+        self._disconnected = False
+
+    def _on_disconnect(self, client):
+        """Callback when device disconnects"""
+        print("⚠️  Соединение разорвано!")
+        self._disconnected = True
+        self.response_event.set()  # Unblock any waiting responses
+
+    async def ensure_connected(self) -> bool:
+        """Check connection and reconnect if needed"""
+        if self._disconnected or not self.client or not self.client.is_connected:
+            print("🔄 Попытка переподключения...")
+            try:
+                await self.connect()
+                self._disconnected = False
+                return True
+            except Exception as e:
+                print(f"❌ Переподключение не удалось: {e}")
+                return False
+        return True
 
     def generate_hmac(self, command: dict) -> str:
         """Генерация HMAC подписи для команды"""
@@ -94,9 +129,23 @@ class BLERegistrationClient:
     async def connect(self):
         """Подключение к BLE устройству"""
         print(f"🔄 Подключение к {self.device_address}...")
-        self.client = BleakClient(self.device_address)
+        self.client = BleakClient(
+            self.device_address,
+            disconnected_callback=self._on_disconnect
+        )
         await self.client.connect()
+        self._disconnected = False
         print(f"✅ Подключено к {self.device_address}")
+
+        # Get negotiated MTU
+        try:
+            mtu = self.client.mtu_size
+            if mtu and mtu > 23:
+                self._mtu = mtu
+                self._write_chunk_size = mtu - 3
+                print(f"   MTU: {mtu} байт (chunk size: {self._write_chunk_size})")
+        except Exception as e:
+            print(f"   MTU: используем значение по умолчанию {self._mtu}")
 
         # Подписка на уведомления
         await self.client.start_notify(RESPONSE_CHAR_UUID, self.notification_handler)
@@ -109,13 +158,61 @@ class BLERegistrationClient:
             await self.client.disconnect()
             print("🔌 Отключено от устройства")
 
-    async def send_command(self, command: dict):
-        """Отправка команды на сервер"""
-        command_json = json.dumps(command)
-        command_bytes = command_json.encode('utf-8')
+    async def send_command(self, command: dict, sleep_ms: int = SLEEP_BETWEEN_CHUNKS_MS):
+        """
+        Отправка команды на сервер с length-prefix фреймингом.
 
-        print(f"📤 Отправка: {command.get('command')} ({len(command_bytes)} байт)")
-        await self.client.write_gatt_char(COMMAND_CHAR_UUID, command_bytes, response=True)
+        Protocol:
+        ┌─────────────────┬──────────────┬─────────────────────┐
+        │ Total Length    │ Sequence #   │ Payload (JSON)      │
+        │ 2 bytes BE      │ 1 byte       │ N bytes             │
+        └─────────────────┴──────────────┴─────────────────────┘
+        """
+        # Ensure we're connected
+        if not await self.ensure_connected():
+            raise ConnectionError("Not connected to BLE device")
+
+        # Serialize payload
+        payload = json.dumps(command, separators=(',', ':')).encode('utf-8')
+
+        # Build framed packet: header + payload
+        header = struct.pack('>HB', len(payload), self._seq & 0xFF)
+        packet = header + payload
+        self._seq += 1
+
+        cmd_name = command.get('command', 'unknown')
+        print(f"📤 Отправка: {cmd_name} ({len(payload)} байт, seq={self._seq - 1})")
+
+        # Split into MTU-sized chunks and send
+        for i in range(0, len(packet), self._write_chunk_size):
+            chunk = packet[i:i + self._write_chunk_size]
+
+            for attempt in range(MAX_RETRIES):
+                try:
+                    # Check if still connected before write
+                    if self._disconnected:
+                        if not await self.ensure_connected():
+                            raise ConnectionError("Connection lost during transfer")
+
+                    await self.client.write_gatt_char(
+                        COMMAND_CHAR_UUID,
+                        chunk,
+                        response=True
+                    )
+                    break  # Success
+                except Exception as e:
+                    if attempt < MAX_RETRIES - 1:
+                        print(f"   ⚠️  Write retry {attempt + 1}/{MAX_RETRIES}: {e}")
+                        await asyncio.sleep(0.2)
+                        # Try to reconnect on retry
+                        if self._disconnected:
+                            await self.ensure_connected()
+                    else:
+                        raise
+
+            # Small delay between chunks for BlueZ stability
+            if i + self._write_chunk_size < len(packet):
+                await asyncio.sleep(sleep_ms / 1000.0)
 
     async def begin_upsert(self, employee_id: str, display_name: str,
                           access_start: str, access_end: str, num_photos: int):
@@ -146,7 +243,9 @@ class BLERegistrationClient:
             print(f"❌ Ошибка: {response.get('message') if response else 'No response'}")
             return False
 
-    async def send_photo(self, photo_path: str, photo_index: int, chunk_size: int, sleep_ms: int):
+    async def send_photo(self, photo_path: str, photo_index: int,
+                         chunk_size: int = CHUNK_SIZE,
+                         sleep_ms: int = SLEEP_BETWEEN_CHUNKS_MS):
         """Отправка фотографии чанками"""
         print(f"\n{'='*60}")
         print(f"📸 Отправка фото {photo_index}: {photo_path}")
@@ -161,11 +260,11 @@ class BLERegistrationClient:
         # Конвертация в base64
         photo_b64 = base64.b64encode(photo_data).decode('utf-8')
 
-        # Разбивка на чанки
+        # Разбивка на чанки (base64 data chunks, not BLE MTU chunks)
         chunks = [photo_b64[i:i+chunk_size] for i in range(0, len(photo_b64), chunk_size)]
         total_chunks = len(chunks)
 
-        print(f"   Чанков: {total_chunks}")
+        print(f"   Base64 чанков: {total_chunks} (по {chunk_size} символов)")
 
         # Вычисление хэша
         photo_hash = hashlib.sha256(photo_data).hexdigest()
@@ -185,7 +284,8 @@ class BLERegistrationClient:
             if is_last:
                 command['sha256'] = photo_hash
 
-            await self.send_command(command)
+            # Send with inter-command delay
+            await self.send_command(command, sleep_ms=sleep_ms)
             response = await self.wait_for_response()
 
             if not response:
@@ -203,7 +303,8 @@ class BLERegistrationClient:
             if is_last and response.get('type') == 'OK':
                 print(f"\n   ✅ Фото {photo_index} отправлено ({response.get('photos_received')}/{response.get('photos_total')})")
 
-            if sleep_ms > 0:
+            # Additional delay between photo chunks for stability
+            if not is_last:
                 await asyncio.sleep(sleep_ms / 1000.0)
 
         return True
@@ -312,8 +413,9 @@ async def main():
     parser.add_argument('--photos', nargs='+', required=True, help='Пути к фотографиям')
     parser.add_argument('--secret', required=True, help='Shared secret для HMAC')
     parser.add_argument('--device-name', default=DEVICE_NAME, help=f'Имя BLE устройства (по умолчанию: {DEVICE_NAME})')
-    parser.add_argument('--chunk-size', type=int, default=CHUNK_SIZE, help=f'Размер чанка (по умолчанию: {CHUNK_SIZE})')
-    parser.add_argument('--sleep-ms', type=int, default=SLEEP_BETWEEN_CHUNKS_MS, help=f'Пауза между чанками в мс (по умолчанию: {SLEEP_BETWEEN_CHUNKS_MS})')
+    parser.add_argument('--chunk-size', type=int, default=CHUNK_SIZE, help=f'Размер base64 чанка фото (по умолчанию: {CHUNK_SIZE})')
+    parser.add_argument('--sleep-ms', type=int, default=SLEEP_BETWEEN_CHUNKS_MS, help=f'Пауза между командами в мс (по умолчанию: {SLEEP_BETWEEN_CHUNKS_MS})')
+    parser.add_argument('--mtu', type=int, default=DEFAULT_MTU, help=f'BLE MTU (по умолчанию: {DEFAULT_MTU}, будет перезаписан при подключении)')
 
     args = parser.parse_args()
 
@@ -342,7 +444,7 @@ async def main():
     print(f"Фотографий: {len(args.photos)}")
     print(f"{'='*60}\n")
 
-    client = BLERegistrationClient(device_address, args.secret)
+    client = BLERegistrationClient(device_address, args.secret, mtu=args.mtu)
 
     try:
         await client.connect()
