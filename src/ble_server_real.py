@@ -258,6 +258,17 @@ class CommandCharacteristic(Characteristic):
         self._timeout_handle = None
         return False  # Don't repeat
 
+    def reset_state(self):
+        """Reset receiver state - call on new connection"""
+        logger.info("Resetting BLE receiver state")
+        self._rx_buffer = bytearray()
+        self._rx_state = RxState.WAIT_HEADER
+        self._expected_len = 0
+        self._last_seq = -1
+        if self._timeout_handle:
+            GLib.source_remove(self._timeout_handle)
+            self._timeout_handle = None
+
     def WriteValue(self, value, options):
         """Handle incoming data with length-prefixed framing"""
         try:
@@ -276,19 +287,32 @@ class CommandCharacteristic(Characteristic):
                         self._rx_buffer[:self.HEADER_SIZE]
                     )
 
-                    # Validate length
-                    if self._expected_len > self._max_command_size:
-                        logger.error(f"Message too large: {self._expected_len} bytes")
+                    # Sanity check: if length looks wrong, might be garbage data
+                    if self._expected_len == 0 or self._expected_len > self._max_command_size:
+                        logger.error(f"Invalid message length: {self._expected_len}, resetting buffer")
                         self._rx_buffer = bytearray()
                         self._rx_state = RxState.WAIT_HEADER
-                        error_response = {'type': 'ERROR', 'message': 'Command too large'}
-                        self.response_chrc.send_notification(json.dumps(error_response))
+                        if self._expected_len > 0:
+                            error_response = {'type': 'ERROR', 'message': 'Command too large'}
+                            self.response_chrc.send_notification(json.dumps(error_response))
                         return
 
+                    # Detect new connection: if seq resets to 0 but we had higher seq before
+                    # This indicates a new client session - clear any stale data
+                    if seq == 0 and self._last_seq > 0:
+                        logger.info(f"New session detected (seq reset), clearing buffer")
+                        self._rx_buffer = self._rx_buffer[:self.HEADER_SIZE + self._expected_len] \
+                            if len(self._rx_buffer) >= self.HEADER_SIZE else bytearray()
+
                     # Check for duplicate (same sequence number)
-                    if seq == self._last_seq:
+                    if seq == self._last_seq and self._last_seq >= 0:
                         logger.debug(f"Duplicate message seq={seq}, ignoring")
-                        self._rx_buffer = self._rx_buffer[self.HEADER_SIZE + self._expected_len:]
+                        # Skip this message entirely
+                        skip_len = self.HEADER_SIZE + self._expected_len
+                        if len(self._rx_buffer) >= skip_len:
+                            self._rx_buffer = self._rx_buffer[skip_len:]
+                        else:
+                            self._rx_buffer = bytearray()
                         continue
 
                     self._last_seq = seq
@@ -332,11 +356,18 @@ class CommandCharacteristic(Characteristic):
             self.response_chrc.send_notification(response_json)
 
         except json.JSONDecodeError as e:
+            # Log first bytes for debugging
             logger.error(f"Invalid JSON: {e}")
+            logger.error(f"Payload hex (first 50 bytes): {payload[:50].hex()}")
+            logger.error(f"Payload repr (first 100 chars): {repr(payload[:100])}")
+            # Reset state on parse error - likely corrupted data
+            self.reset_state()
             error_response = {'type': 'ERROR', 'message': f'Invalid JSON: {e}'}
             self.response_chrc.send_notification(json.dumps(error_response))
         except UnicodeDecodeError as e:
             logger.error(f"Invalid UTF-8: {e}")
+            logger.error(f"Payload hex (first 50 bytes): {payload[:50].hex()}")
+            self.reset_state()
             error_response = {'type': 'ERROR', 'message': 'Invalid encoding'}
             self.response_chrc.send_notification(json.dumps(error_response))
 
@@ -390,6 +421,7 @@ class ResponseCharacteristic(Characteristic):
             service
         )
         self.notifying = False
+        self.command_chrc = None  # Set by RealBLEServer after creation
 
     def send_notification(self, message: str):
         """Send notification to client"""
@@ -414,22 +446,30 @@ class ResponseCharacteristic(Characteristic):
             logger.error(f"Notification error: {e}")
 
     def StartNotify(self):
-        """Client subscribed to notifications"""
+        """Client subscribed to notifications - indicates new connection"""
         if self.notifying:
             logger.warning('Already notifying')
             return
 
         self.notifying = True
-        logger.info('Notifications enabled')
+        logger.info('Notifications enabled - new client connected')
+
+        # Reset command characteristic buffer on new connection
+        if self.command_chrc:
+            self.command_chrc.reset_state()
 
     def StopNotify(self):
-        """Client unsubscribed from notifications"""
+        """Client unsubscribed from notifications - client disconnecting"""
         if not self.notifying:
             logger.warning('Not notifying')
             return
 
         self.notifying = False
-        logger.info('Notifications disabled')
+        logger.info('Notifications disabled - client disconnected')
+
+        # Reset command characteristic buffer on disconnect
+        if self.command_chrc:
+            self.command_chrc.reset_state()
 
 
 class Advertisement(dbus.service.Object):
@@ -533,6 +573,9 @@ class RealBLEServer:
             self.bus, 0, self.service,
             protocol, self.response_chrc
         )
+
+        # Link response to command for connection state management
+        self.response_chrc.command_chrc = self.command_chrc
 
         # Add characteristics to service
         self.service.add_characteristic(self.command_chrc)
