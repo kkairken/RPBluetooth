@@ -30,6 +30,7 @@ import struct
 import time
 import os
 import base64
+import math
 from pathlib import Path
 from typing import Optional, List
 
@@ -48,15 +49,13 @@ RESPONSE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
 # Protocol constants
 HEADER_SIZE = 3  # 2 bytes length + 1 byte sequence
 
-# Параметры
-CHUNK_SIZE = 512  # ~600 байт команда = 4 BLE пакета
+# Параметры - ULTRA RELIABLE (увеличены задержки для стабильности BlueZ)
+CHUNK_SIZE = 1024  # Уменьшенные чанки для надежности
 DEFAULT_MTU = 185
-SLEEP_BETWEEN_CHUNKS_MS = 50  # Пауза между чанками
-INTER_PACKET_DELAY_MS = 15  # Пауза между BLE пакетами
-FLUSH_EVERY_N = 20  # Большая пауза каждые N чанков
-FLUSH_PAUSE_MS = 500  # Длительность flush паузы
+SLEEP_BETWEEN_CHUNKS_MS = 150  # Увеличено: 150ms между командами
+INTER_PACKET_DELAY_MS = 80  # Увеличено: 80ms между BLE пакетами
 DEVICE_NAME = "RP3_FaceAccess"
-MAX_RETRIES = 3
+MAX_RETRIES = 5
 
 
 class BLERegistrationClient:
@@ -74,11 +73,13 @@ class BLERegistrationClient:
         self._write_chunk_size = mtu - 3  # ATT header overhead
         self._disconnected = False
         self._packet_delay_ms = packet_delay_ms  # Delay between BLE packets
+        self._fragment_buffer = bytearray()  # Buffer for fragmented notifications
 
     def _on_disconnect(self, client):
         """Callback when device disconnects"""
         print("⚠️  Соединение разорвано!")
         self._disconnected = True
+        self._fragment_buffer = bytearray()  # Очищаем буфер фрагментов
         self.response_event.set()  # Unblock any waiting responses
 
     async def ensure_connected(self) -> bool:
@@ -121,8 +122,28 @@ class BLERegistrationClient:
         return signature, nonce
 
     def notification_handler(self, sender, data):
-        """Обработчик уведомлений от сервера"""
+        """Обработчик уведомлений от сервера с поддержкой фрагментации"""
         try:
+            # Проверяем, является ли это фрагментированным сообщением
+            # Протокол фрагментации: первый байт = флаг (0x01 = продолжение, 0x00 = конец)
+            if len(data) > 0 and data[0] in (0x00, 0x01):
+                # Это фрагментированное сообщение
+                is_continuation = (data[0] == 0x01)
+                fragment_data = data[1:]
+
+                if not hasattr(self, '_fragment_buffer'):
+                    self._fragment_buffer = bytearray()
+
+                self._fragment_buffer.extend(fragment_data)
+
+                if is_continuation:
+                    # Ждём следующий фрагмент
+                    return
+
+                # Последний фрагмент - собираем полное сообщение
+                data = bytes(self._fragment_buffer)
+                self._fragment_buffer = bytearray()
+
             response_str = data.decode('utf-8')
             response = json.loads(response_str)
             self.last_response = response
@@ -134,6 +155,9 @@ class BLERegistrationClient:
                 print(f"\n📩 Ответ: {json.dumps(response, indent=2, ensure_ascii=False)}")
         except Exception as e:
             print(f"\n❌ Ошибка обработки ответа: {e}")
+            # Очищаем буфер фрагментов при ошибке
+            if hasattr(self, '_fragment_buffer'):
+                self._fragment_buffer = bytearray()
 
     def clear_response(self):
         """Очистить предыдущий ответ перед новой операцией"""
@@ -152,6 +176,11 @@ class BLERegistrationClient:
     async def connect(self):
         """Подключение к BLE устройству"""
         print(f"🔄 Подключение к {self.device_address}...")
+
+        # Очищаем состояние перед подключением
+        self._fragment_buffer = bytearray()
+        self._seq = 0  # Сброс sequence number для нового соединения
+
         self.client = BleakClient(
             self.device_address,
             disconnected_callback=self._on_disconnect
@@ -173,6 +202,9 @@ class BLERegistrationClient:
         # Подписка на уведомления
         await self.client.start_notify(RESPONSE_CHAR_UUID, self.notification_handler)
         print(f"✅ Подписка на уведомления активирована")
+
+        # Даём серверу время на инициализацию после подключения
+        await asyncio.sleep(0.3)
 
     async def disconnect(self):
         """Отключение от BLE устройства"""
@@ -318,36 +350,62 @@ class BLERegistrationClient:
                          chunk_size: int = CHUNK_SIZE,
                          sleep_ms: int = SLEEP_BETWEEN_CHUNKS_MS):
         """
-        Отправка фотографии чанками.
-        Промежуточные чанки: только BLE ACK (response=True), без notification.
-        Последний чанк: ждём OK notification от сервера.
+        Отправка фотографии — ULTRA RELIABLE режим.
+        Отправляем RAW байты напрямую, без JSON framing для данных.
         """
         print(f"\n{'='*60}")
         print(f"📸 Отправка фото {photo_index}: {photo_path}")
         print(f"{'='*60}")
 
-        # Загрузка фото
         with open(photo_path, 'rb') as f:
             photo_data = f.read()
 
         print(f"   Размер: {len(photo_data):,} байт")
 
-        # Конвертация в base64
         photo_b64 = base64.b64encode(photo_data).decode('utf-8')
-
-        # Разбивка на чанки
-        chunks = [photo_b64[i:i+chunk_size] for i in range(0, len(photo_b64), chunk_size)]
-        total_chunks = len(chunks)
-
-        print(f"   Чанков: {total_chunks} (по {chunk_size} символов)")
-
-        # Вычисление хэша
         photo_hash = hashlib.sha256(photo_data).hexdigest()
 
-        # Очищаем перед началом
+        # Calculate safe chunk size to fit a full command into a single BLE write.
+        max_payload = self._write_chunk_size - HEADER_SIZE
+        safe_chunk_size = chunk_size
+        for _ in range(3):
+            total_chunks_est = max(1, math.ceil(len(photo_b64) / max(1, safe_chunk_size)))
+            overhead_cmd = {
+                "command": "PHOTO_CHUNK",
+                "chunk_index": total_chunks_est - 1,
+                "total_chunks": total_chunks_est,
+                "data": "",
+                "is_last": True,
+                "sha256": photo_hash
+            }
+            overhead_len = len(json.dumps(overhead_cmd, separators=(',', ':')).encode('utf-8'))
+            max_data_len = max_payload - overhead_len
+            if max_data_len < 1:
+                raise ValueError("MTU too small for PHOTO_CHUNK command")
+            # Base64 data must be multiple of 4 chars to avoid padding errors
+            max_data_len -= (max_data_len % 4)
+            if max_data_len < 4:
+                raise ValueError("MTU too small for base64 payload")
+            if safe_chunk_size <= max_data_len:
+                break
+            safe_chunk_size = max_data_len
+
+        # Ensure multiple of 4 for base64 alignment
+        safe_chunk_size -= (safe_chunk_size % 4)
+        if safe_chunk_size < 4:
+            raise ValueError("Calculated chunk size too small for base64 alignment")
+
+        if safe_chunk_size != chunk_size:
+            print(f"   ⚠️  chunk_size уменьшен до {safe_chunk_size} для MTU {self._mtu}")
+
+        # Разбиваем на безопасные чанки
+        chunks = [photo_b64[i:i+safe_chunk_size] for i in range(0, len(photo_b64), safe_chunk_size)]
+        total_chunks = len(chunks)
+
+        print(f"   Чанков: {total_chunks}")
+
         self.clear_response()
 
-        # Отправляем все чанки
         for i, chunk in enumerate(chunks):
             is_last = (i == total_chunks - 1)
 
@@ -358,47 +416,83 @@ class BLERegistrationClient:
                 "data": chunk,
                 "is_last": is_last
             }
-
             if is_last:
                 command['sha256'] = photo_hash
 
-            try:
-                # Отправляем с BLE ACK (response=True гарантирует доставку)
-                await self.send_command(command)
-            except Exception as e:
-                print(f"\n   ❌ Ошибка отправки чанка {i+1}: {e}")
+            # ULTRA RELIABLE: отправляем каждый BLE пакет отдельно с большой паузой
+            success = await self._send_reliable(command)
+            if not success:
+                print(f"\n   ❌ Ошибка на чанке {i+1}")
                 return False
+            if sleep_ms > 0:
+                await asyncio.sleep(sleep_ms / 1000.0)
 
-            # Показываем прогресс
-            pct = (i+1)*100//total_chunks
-            print(f"   📊 Отправлено: {i+1}/{total_chunks} ({pct}%)", end='\r')
+            print(f"   📊 {i+1}/{total_chunks} ({(i+1)*100//total_chunks}%)", end='\r')
 
-            # Пауза между чанками
-            await asyncio.sleep(sleep_ms / 1000.0)
+        print(f"\n   ⏳ Ожидание ответа...")
+        response = await self.wait_for_response(timeout=60.0)
 
-            # Flush пауза каждые N чанков для предотвращения переполнения буфера BlueZ
-            if (i + 1) % FLUSH_EVERY_N == 0 and not is_last:
-                print(f"\n   ⏸️  Flush пауза ({i+1}/{total_chunks})...")
-                await asyncio.sleep(FLUSH_PAUSE_MS / 1000.0)
-
-        # Ждём OK от сервера после последнего чанка
-        print(f"\n   ⏳ Ожидание подтверждения от сервера...")
-        response = await self.wait_for_response(timeout=30.0)
-
-        if not response:
-            print(f"   ❌ Сервер не ответил")
-            return False
-
-        if response.get('type') == 'ERROR':
-            print(f"   ❌ Ошибка: {response.get('message')}")
-            return False
-
-        if response.get('type') == 'OK':
-            print(f"   ✅ Фото {photo_index} отправлено успешно!")
+        if response and response.get('type') == 'OK':
+            print(f"   ✅ Фото отправлено!")
             return True
 
-        print(f"   ⚠️ Неожиданный ответ: {response}")
+        print(f"   ❌ Ошибка: {response}")
         return False
+
+    async def _send_reliable(self, command: dict) -> bool:
+        """Супер-надёжная отправка одной команды с повторами"""
+        payload = json.dumps(command, separators=(',', ':')).encode('utf-8')
+        header = struct.pack('>HB', len(payload), self._seq & 0xFF)
+        packet = header + payload
+        self._seq += 1
+
+        # Разбиваем на BLE пакеты
+        chunks = []
+        for i in range(0, len(packet), self._write_chunk_size):
+            chunks.append(packet[i:i + self._write_chunk_size])
+
+        # Отправляем каждый BLE пакет с паузой и повторами
+        for idx, chunk in enumerate(chunks):
+            for attempt in range(5):  # 5 попыток
+                try:
+                    # Проверяем соединение перед каждой попыткой
+                    if self._disconnected or not self.client or not self.client.is_connected:
+                        print(f"\n   🔄 Переподключение (попытка {attempt + 1})...")
+                        await asyncio.sleep(1.5)  # Увеличена пауза перед переподключением
+                        try:
+                            await self.connect()
+                            self._disconnected = False
+                        except Exception as conn_err:
+                            print(f"   ⚠️  Ошибка переподключения: {conn_err}")
+                            if attempt < 4:
+                                continue
+                            else:
+                                return False
+
+                    await self.client.write_gatt_char(
+                        COMMAND_CHAR_UUID,
+                        chunk,
+                        response=True
+                    )
+                    break
+                except Exception as e:
+                    error_str = str(e).lower()
+                    # Проверяем, не разорвалось ли соединение
+                    if 'disconnect' in error_str or 'not connected' in error_str:
+                        self._disconnected = True
+                    if attempt < 4:
+                        print(f"   ⚠️  Retry {attempt + 1}/5: {e}")
+                        await asyncio.sleep(0.5 + attempt * 0.2)  # Увеличивающаяся задержка
+                    else:
+                        print(f"\n   ❌ Не удалось отправить после 5 попыток: {e}")
+                        return False
+
+            # Пауза между BLE пакетами — КРИТИЧНО для стабильности BlueZ
+            await asyncio.sleep(0.08)  # Увеличено до 80ms
+
+        # Пауза после команды для обработки на сервере
+        await asyncio.sleep(0.12)  # Увеличено до 120ms
+        return True
 
     async def end_upsert(self):
         """Завершение регистрации"""

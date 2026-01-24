@@ -221,7 +221,7 @@ class CommandCharacteristic(Characteristic):
     └─────────────────┴──────────────┴─────────────────────┘
     """
     HEADER_SIZE = 3  # 2 bytes length (big-endian) + 1 byte sequence
-    RX_TIMEOUT_MS = 10000  # Reset buffer if no data for 10 seconds
+    RX_TIMEOUT_MS = 30000  # Reset buffer if no data for 30 seconds (increased for large photos)
 
     def __init__(self, bus, index, service, protocol: BLEProtocol, response_chrc):
         Characteristic.__init__(
@@ -251,7 +251,10 @@ class CommandCharacteristic(Characteristic):
     def _on_timeout(self):
         """Called when no data received for RX_TIMEOUT_MS"""
         if len(self._rx_buffer) > 0:
-            logger.warning(f"RX timeout, discarding {len(self._rx_buffer)} bytes")
+            logger.warning(
+                f"RX timeout after {self.RX_TIMEOUT_MS}ms, discarding {len(self._rx_buffer)} bytes. "
+                f"State: {self._rx_state.name}, expected_len: {self._expected_len}"
+            )
         self._rx_buffer = bytearray()
         self._rx_state = RxState.WAIT_HEADER
         self._expected_len = 0
@@ -419,6 +422,10 @@ class ResponseCharacteristic(Characteristic):
     Response characteristic (Notify)
     Sends responses to BLE client
     """
+    # Maximum notification size (conservative for compatibility)
+    # BLE 4.2+ supports up to 512 bytes, but some adapters have issues
+    MAX_NOTIFICATION_SIZE = 180  # Safe size for most BLE adapters
+
     def __init__(self, bus, index, service):
         Characteristic.__init__(
             self, bus, index,
@@ -428,16 +435,32 @@ class ResponseCharacteristic(Characteristic):
         )
         self.notifying = False
         self.command_chrc = None  # Set by RealBLEServer after creation
+        self._notification_queue = []
+        self._sending = False
 
     def send_notification(self, message: str):
-        """Send notification to client"""
+        """Send notification to client with fragmentation support"""
         if not self.notifying:
             logger.warning("Client not subscribed to notifications")
             return
 
         try:
-            # Convert string to bytes
-            value = [dbus.Byte(c) for c in message.encode('utf-8')]
+            message_bytes = message.encode('utf-8')
+
+            # If message fits in one notification, send directly
+            if len(message_bytes) <= self.MAX_NOTIFICATION_SIZE:
+                self._send_single_notification(message_bytes)
+            else:
+                # Fragment large messages
+                self._send_fragmented_notification(message_bytes)
+
+        except Exception as e:
+            logger.error(f"Notification error: {e}")
+
+    def _send_single_notification(self, data: bytes):
+        """Send a single notification"""
+        try:
+            value = [dbus.Byte(c) for c in data]
             self.value = value
 
             # Emit PropertiesChanged signal
@@ -446,10 +469,49 @@ class ResponseCharacteristic(Characteristic):
                 {'Value': self.value},
                 []
             )
-            logger.debug(f"Sent notification: {message[:100]}...")
+            logger.debug(f"Sent notification: {len(data)} bytes")
 
         except Exception as e:
-            logger.error(f"Notification error: {e}")
+            logger.error(f"Single notification error: {e}")
+
+    def _send_fragmented_notification(self, data: bytes):
+        """Send fragmented notification for large messages"""
+        try:
+            # Fragment protocol:
+            # First byte: flags (0x01 = more fragments follow, 0x00 = last fragment)
+            # Remaining bytes: payload
+
+            chunk_size = self.MAX_NOTIFICATION_SIZE - 1  # Reserve 1 byte for flag
+            chunks = []
+
+            for i in range(0, len(data), chunk_size):
+                chunk = data[i:i + chunk_size]
+                is_last = (i + chunk_size >= len(data))
+                flag = 0x00 if is_last else 0x01
+                chunks.append(bytes([flag]) + chunk)
+
+            logger.info(f"Fragmenting notification: {len(data)} bytes -> {len(chunks)} fragments")
+
+            # Send fragments with small delay between them
+            for idx, chunk in enumerate(chunks):
+                value = [dbus.Byte(c) for c in chunk]
+                self.value = value
+
+                self.PropertiesChanged(
+                    GATT_CHRC_IFACE,
+                    {'Value': self.value},
+                    []
+                )
+
+                # Small delay between fragments to prevent BLE buffer overflow
+                if idx < len(chunks) - 1:
+                    import time
+                    time.sleep(0.02)  # 20ms between fragments
+
+            logger.debug(f"Sent fragmented notification: {len(chunks)} parts")
+
+        except Exception as e:
+            logger.error(f"Fragmented notification error: {e}")
 
     def StartNotify(self):
         """Client subscribed to notifications - indicates new connection"""
