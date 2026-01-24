@@ -6,7 +6,7 @@ import onnxruntime as ort
 import cv2
 import numpy as np
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
