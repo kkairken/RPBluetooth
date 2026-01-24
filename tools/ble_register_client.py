@@ -48,11 +48,13 @@ RESPONSE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
 # Protocol constants
 HEADER_SIZE = 3  # 2 bytes length + 1 byte sequence
 
-# Параметры - ОДИН BLE пакет на команду для диагностики
-CHUNK_SIZE = 80  # ~170 байт команда = 1 BLE пакет (MTU 182)
+# Параметры
+CHUNK_SIZE = 512  # ~600 байт команда = 4 BLE пакета
 DEFAULT_MTU = 185
-SLEEP_BETWEEN_CHUNKS_MS = 100
-INTER_PACKET_DELAY_MS = 30
+SLEEP_BETWEEN_CHUNKS_MS = 50  # Пауза между чанками
+INTER_PACKET_DELAY_MS = 15  # Пауза между BLE пакетами
+FLUSH_EVERY_N = 20  # Большая пауза каждые N чанков
+FLUSH_PAUSE_MS = 500  # Длительность flush паузы
 DEVICE_NAME = "RP3_FaceAccess"
 MAX_RETRIES = 3
 
@@ -315,7 +317,11 @@ class BLERegistrationClient:
     async def send_photo(self, photo_path: str, photo_index: int,
                          chunk_size: int = CHUNK_SIZE,
                          sleep_ms: int = SLEEP_BETWEEN_CHUNKS_MS):
-        """Отправка фотографии чанками — синхронный режим с подтверждением каждого чанка"""
+        """
+        Отправка фотографии чанками.
+        Промежуточные чанки: только BLE ACK (response=True), без notification.
+        Последний чанк: ждём OK notification от сервера.
+        """
         print(f"\n{'='*60}")
         print(f"📸 Отправка фото {photo_index}: {photo_path}")
         print(f"{'='*60}")
@@ -338,7 +344,10 @@ class BLERegistrationClient:
         # Вычисление хэша
         photo_hash = hashlib.sha256(photo_data).hexdigest()
 
-        # Синхронный режим: отправляем и ждём ACK на каждый чанк
+        # Очищаем перед началом
+        self.clear_response()
+
+        # Отправляем все чанки
         for i, chunk in enumerate(chunks):
             is_last = (i == total_chunks - 1)
 
@@ -353,30 +362,43 @@ class BLERegistrationClient:
             if is_last:
                 command['sha256'] = photo_hash
 
-            # Отправляем и ждём подтверждение
-            self.clear_response()
-            await self.send_command(command)
-            response = await self.wait_for_response(timeout=10.0)
-
-            if not response:
-                print(f"\n   ❌ Нет ответа на чанк {i+1}/{total_chunks}")
-                return False
-
-            if response.get('type') == 'ERROR':
-                print(f"\n   ❌ Ошибка: {response.get('message')}")
+            try:
+                # Отправляем с BLE ACK (response=True гарантирует доставку)
+                await self.send_command(command)
+            except Exception as e:
+                print(f"\n   ❌ Ошибка отправки чанка {i+1}: {e}")
                 return False
 
             # Показываем прогресс
-            print(f"   📊 Прогресс: {i+1}/{total_chunks}", end='\r')
-
-            if is_last and response.get('type') == 'OK':
-                print(f"\n   ✅ Фото {photo_index} отправлено")
-                return True
+            pct = (i+1)*100//total_chunks
+            print(f"   📊 Отправлено: {i+1}/{total_chunks} ({pct}%)", end='\r')
 
             # Пауза между чанками
             await asyncio.sleep(sleep_ms / 1000.0)
 
-        return True
+            # Flush пауза каждые N чанков для предотвращения переполнения буфера BlueZ
+            if (i + 1) % FLUSH_EVERY_N == 0 and not is_last:
+                print(f"\n   ⏸️  Flush пауза ({i+1}/{total_chunks})...")
+                await asyncio.sleep(FLUSH_PAUSE_MS / 1000.0)
+
+        # Ждём OK от сервера после последнего чанка
+        print(f"\n   ⏳ Ожидание подтверждения от сервера...")
+        response = await self.wait_for_response(timeout=30.0)
+
+        if not response:
+            print(f"   ❌ Сервер не ответил")
+            return False
+
+        if response.get('type') == 'ERROR':
+            print(f"   ❌ Ошибка: {response.get('message')}")
+            return False
+
+        if response.get('type') == 'OK':
+            print(f"   ✅ Фото {photo_index} отправлено успешно!")
+            return True
+
+        print(f"   ⚠️ Неожиданный ответ: {response}")
+        return False
 
     async def end_upsert(self):
         """Завершение регистрации"""
