@@ -49,18 +49,20 @@ RESPONSE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
 HEADER_SIZE = 3  # 2 bytes length + 1 byte sequence
 
 # Параметры
-CHUNK_SIZE = 4096  # Base64 chunk size for photo data (larger = fewer BLE commands)
+CHUNK_SIZE = 2048  # Base64 chunk size for photo data
 DEFAULT_MTU = 185  # Conservative MTU (most devices support 185+)
-SLEEP_BETWEEN_CHUNKS_MS = 150  # Pause between commands for BlueZ stability
+SLEEP_BETWEEN_CHUNKS_MS = 200  # Pause between PHOTO_CHUNK commands
+INTER_PACKET_DELAY_MS = 15  # Pause between BLE packets within one command
 DEVICE_NAME = "RP3_FaceAccess"
 MAX_RETRIES = 3  # Retry count for failed writes
-FLUSH_EVERY_N_CHUNKS = 10  # Extra pause every N chunks
+FLUSH_EVERY_N_CHUNKS = 5  # Extra pause every N chunks
 
 
 class BLERegistrationClient:
     """BLE клиент для регистрации сотрудников"""
 
-    def __init__(self, device_address: str, shared_secret: str, mtu: int = DEFAULT_MTU):
+    def __init__(self, device_address: str, shared_secret: str, mtu: int = DEFAULT_MTU,
+                 packet_delay_ms: int = INTER_PACKET_DELAY_MS):
         self.device_address = device_address
         self.shared_secret = shared_secret
         self.client: Optional[BleakClient] = None
@@ -70,6 +72,7 @@ class BLERegistrationClient:
         self._mtu = mtu
         self._write_chunk_size = mtu - 3  # ATT header overhead
         self._disconnected = False
+        self._packet_delay_ms = packet_delay_ms  # Delay between BLE packets
 
     def _on_disconnect(self, client):
         """Callback when device disconnects"""
@@ -191,7 +194,8 @@ class BLERegistrationClient:
         self._seq += 1
 
         cmd_name = command.get('command', 'unknown')
-        print(f"📤 Отправка: {cmd_name} ({len(payload)} байт, seq={self._seq - 1})")
+        num_ble_packets = (len(packet) + self._write_chunk_size - 1) // self._write_chunk_size
+        print(f"📤 Отправка: {cmd_name} ({len(payload)} байт, seq={self._seq - 1}, {num_ble_packets} BLE пакетов)")
 
         # Split into MTU-sized chunks and send
         for i in range(0, len(packet), self._write_chunk_size):
@@ -220,9 +224,9 @@ class BLERegistrationClient:
                     else:
                         raise
 
-            # Small delay between chunks for BlueZ stability
+            # Delay between BLE packets within one command (critical for BlueZ stability)
             if i + self._write_chunk_size < len(packet):
-                await asyncio.sleep(sleep_ms / 1000.0)
+                await asyncio.sleep(self._packet_delay_ms / 1000.0)
 
     async def begin_upsert(self, employee_id: str, display_name: str,
                           access_start: str, access_end: str, num_photos: int):
@@ -315,13 +319,14 @@ class BLERegistrationClient:
             if is_last and response.get('type') == 'OK':
                 print(f"\n   ✅ Фото {photo_index} отправлено ({response.get('photos_received')}/{response.get('photos_total')})")
 
-            # Additional delay between photo chunks for stability
+            # Delay between PHOTO_CHUNK commands
             if not is_last:
                 await asyncio.sleep(sleep_ms / 1000.0)
 
                 # Extra flush pause every N chunks to let BlueZ catch up
                 if (i + 1) % FLUSH_EVERY_N_CHUNKS == 0:
-                    await asyncio.sleep(0.3)  # 300ms extra pause
+                    print(f"   ⏸️  Flush pause...")
+                    await asyncio.sleep(0.5)  # 500ms extra pause
 
         return True
 
@@ -431,6 +436,7 @@ async def main():
     parser.add_argument('--device-name', default=DEVICE_NAME, help=f'Имя BLE устройства (по умолчанию: {DEVICE_NAME})')
     parser.add_argument('--chunk-size', type=int, default=CHUNK_SIZE, help=f'Размер base64 чанка фото (по умолчанию: {CHUNK_SIZE})')
     parser.add_argument('--sleep-ms', type=int, default=SLEEP_BETWEEN_CHUNKS_MS, help=f'Пауза между командами в мс (по умолчанию: {SLEEP_BETWEEN_CHUNKS_MS})')
+    parser.add_argument('--packet-delay-ms', type=int, default=INTER_PACKET_DELAY_MS, help=f'Пауза между BLE пакетами в мс (по умолчанию: {INTER_PACKET_DELAY_MS})')
     parser.add_argument('--mtu', type=int, default=DEFAULT_MTU, help=f'BLE MTU (по умолчанию: {DEFAULT_MTU}, будет перезаписан при подключении)')
 
     args = parser.parse_args()
@@ -460,7 +466,11 @@ async def main():
     print(f"Фотографий: {len(args.photos)}")
     print(f"{'='*60}\n")
 
-    client = BLERegistrationClient(device_address, args.secret, mtu=args.mtu)
+    client = BLERegistrationClient(
+        device_address, args.secret,
+        mtu=args.mtu,
+        packet_delay_ms=args.packet_delay_ms
+    )
 
     try:
         await client.connect()
