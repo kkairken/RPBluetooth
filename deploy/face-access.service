@@ -12,8 +12,8 @@ WorkingDirectory=/home/hseadmin/RPBluetooth
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/home/hseadmin/RPBluetooth/src
 
-# Set static IP before starting
-ExecStartPre=/sbin/ip addr add 192.168.1.22/24 dev eth0 || true
+# Set static IP before starting (ignore if already set)
+ExecStartPre=-/sbin/ip addr add 192.168.1.22/24 dev eth0
 
 # Main executable (runs as root)
 ExecStart=/home/hseadmin/RPBluetooth/venv/bin/python -u src/main.py --config config/production.yaml
