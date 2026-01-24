@@ -69,6 +69,10 @@ class LockConfig:
     gpio_chip: str = "gpiochip0"
     active_high: bool = True
     mock_mode: bool = False
+    # Exit button configuration
+    button_pin: Optional[int] = None  # GPIO pin for exit button (None = disabled)
+    button_active_low: bool = True    # True if button connects to GND (internal pull-up)
+    button_debounce_ms: int = 50      # Debounce time in milliseconds
 
 
 @dataclass
@@ -171,7 +175,10 @@ def load_config(config_path: str) -> SystemConfig:
             gpio_pin=lock_data.get('gpio_pin', 17),
             gpio_chip=lock_data.get('gpio_chip', 'gpiochip0'),
             active_high=lock_data.get('active_high', True),
-            mock_mode=lock_data.get('mock_mode', False)
+            mock_mode=lock_data.get('mock_mode', False),
+            button_pin=lock_data.get('button_pin'),
+            button_active_low=lock_data.get('button_active_low', True),
+            button_debounce_ms=lock_data.get('button_debounce_ms', 50)
         )
 
         # Parse database config

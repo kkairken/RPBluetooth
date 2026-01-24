@@ -81,7 +81,10 @@ class FaceAccessSystem:
             gpio_chip=config.lock.gpio_chip,
             active_high=config.lock.active_high,
             mock_mode=config.lock.mock_mode,
-            unlock_duration=config.access.unlock_duration_sec
+            unlock_duration=config.access.unlock_duration_sec,
+            button_pin=config.lock.button_pin,
+            button_active_low=config.lock.button_active_low,
+            button_debounce_ms=config.lock.button_debounce_ms
         )
 
         # BLE server
@@ -327,12 +330,24 @@ class FaceAccessSystem:
             self.camera.release()
             logger.info("Recognition loop stopped")
 
+    def _on_exit_button_pressed(self):
+        """Callback when exit button is pressed."""
+        logger.info("Exit button pressed - unlocking door")
+        # Log the event
+        self.db.log_access_attempt(
+            event_type='exit_button',
+            result='granted',
+            reason='Exit button pressed'
+        )
+        # Unlock is called automatically by LockController
+
     async def run(self):
         """Run the system."""
         self.running = True
 
-        # Register BLE callbacks
-        # Note: In full implementation, these would be wired to BLE characteristics
+        # Start exit button monitor if configured
+        if self.config.lock.button_pin is not None:
+            self.lock.start_button_monitor(callback=self._on_exit_button_pressed)
 
         # Start tasks
         tasks = [

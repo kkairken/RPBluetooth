@@ -2,10 +2,12 @@
 Lock controller module.
 Controls door lock via GPIO relay using libgpiod (modern GPIO interface).
 Supports both libgpiod v1.x and v2.x APIs.
+Includes exit button support for manual door release.
 """
 import logging
 import time
-from typing import Optional
+import threading
+from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -19,23 +21,34 @@ class LockController:
         active_high: bool = True,
         mock_mode: bool = False,
         unlock_duration: float = 3.0,
-        gpio_chip: str = "gpiochip0"
+        gpio_chip: str = "gpiochip0",
+        button_pin: Optional[int] = None,
+        button_active_low: bool = True,
+        button_debounce_ms: int = 50
     ):
         """
         Initialize lock controller.
 
         Args:
-            gpio_pin: GPIO line number (BCM numbering, e.g., 17)
+            gpio_pin: GPIO line number for lock relay (BCM numbering, e.g., 17)
             active_high: True if relay is active-high, False if active-low
             mock_mode: If True, don't use actual GPIO (for testing)
             unlock_duration: How long to keep lock open (seconds)
             gpio_chip: GPIO chip device name (default: gpiochip0)
+            button_pin: GPIO line number for exit button (None to disable)
+            button_active_low: True if button connects to GND (use internal pull-up)
+            button_debounce_ms: Debounce time in milliseconds
         """
         self.gpio_pin = gpio_pin
         self.active_high = active_high
         self.mock_mode = mock_mode
         self.unlock_duration = unlock_duration
         self.gpio_chip_name = gpio_chip
+
+        # Button configuration
+        self.button_pin = button_pin
+        self.button_active_low = button_active_low
+        self.button_debounce_ms = button_debounce_ms
 
         # gpiod objects (for v1.x)
         self.chip = None
@@ -44,6 +57,14 @@ class LockController:
         self._request = None
         self._gpiod_version = None
         self.gpio_initialized = False
+
+        # Button state
+        self._button_request = None  # v2.x
+        self._button_line = None     # v1.x
+        self._button_thread = None
+        self._button_running = False
+        self._last_button_time = 0
+        self._button_callback: Optional[Callable[[], None]] = None
 
         if not mock_mode:
             self._init_gpio()
@@ -136,6 +157,141 @@ class LockController:
             config={self.gpio_pin: settings}
         )
 
+    def _init_button_v1(self, gpiod):
+        """Initialize exit button using libgpiod v1.x API."""
+        # Get button line from existing chip
+        self._button_line = self.chip.get_line(self.button_pin)
+
+        # Request as input with pull-up or pull-down
+        flags = gpiod.LINE_REQ_FLAG_BIAS_PULL_UP if self.button_active_low else gpiod.LINE_REQ_FLAG_BIAS_PULL_DOWN
+        self._button_line.request(
+            consumer="face_access_button",
+            type=gpiod.LINE_REQ_DIR_IN,
+            flags=flags
+        )
+
+    def _init_button_v2(self, gpiod):
+        """Initialize exit button using libgpiod v2.x API."""
+        chip_path = f"/dev/{self.gpio_chip_name}"
+
+        # Create line settings for input with bias
+        if self.button_active_low:
+            bias = gpiod.line.Bias.PULL_UP
+        else:
+            bias = gpiod.line.Bias.PULL_DOWN
+
+        settings = gpiod.LineSettings(
+            direction=gpiod.line.Direction.INPUT,
+            bias=bias
+        )
+
+        # Request the button line
+        self._button_request = gpiod.request_lines(
+            chip_path,
+            consumer="face_access_button",
+            config={self.button_pin: settings}
+        )
+
+    def start_button_monitor(self, callback: Optional[Callable[[], None]] = None):
+        """
+        Start monitoring the exit button in a background thread.
+
+        Args:
+            callback: Optional callback to run on button press.
+                     If None, will call self.unlock() directly.
+        """
+        if self.button_pin is None:
+            logger.warning("No button pin configured, cannot start monitor")
+            return
+
+        if self._button_thread and self._button_thread.is_alive():
+            logger.warning("Button monitor already running")
+            return
+
+        # Initialize button GPIO if not done yet
+        if not self.mock_mode and self._button_line is None and self._button_request is None:
+            try:
+                if self._gpiod_version == 2:
+                    self._init_button_v2(self.gpiod)
+                else:
+                    self._init_button_v1(self.gpiod)
+                logger.info(f"Exit button initialized on GPIO {self.button_pin}")
+            except Exception as e:
+                logger.error(f"Failed to initialize button: {e}")
+                return
+
+        self._button_callback = callback
+        self._button_running = True
+        self._button_thread = threading.Thread(
+            target=self._button_monitor_loop,
+            daemon=True,
+            name="ExitButtonMonitor"
+        )
+        self._button_thread.start()
+        logger.info(f"Exit button monitor started (pin={self.button_pin}, active_low={self.button_active_low})")
+
+    def stop_button_monitor(self):
+        """Stop the button monitoring thread."""
+        self._button_running = False
+        if self._button_thread:
+            self._button_thread.join(timeout=1.0)
+            self._button_thread = None
+        logger.info("Exit button monitor stopped")
+
+    def _read_button(self) -> bool:
+        """Read current button state. Returns True if pressed."""
+        if self.mock_mode:
+            return False
+
+        try:
+            if self._gpiod_version == 2:
+                value = self._button_request.get_value(self.button_pin)
+                raw_value = (value == self.gpiod.line.Value.ACTIVE)
+            else:
+                raw_value = bool(self._button_line.get_value())
+
+            # Invert if active_low (button pressed = line goes LOW)
+            return not raw_value if self.button_active_low else raw_value
+
+        except Exception as e:
+            logger.error(f"Error reading button: {e}")
+            return False
+
+    def _button_monitor_loop(self):
+        """Background thread loop for monitoring button presses."""
+        logger.debug("Button monitor loop started")
+        was_pressed = False
+
+        while self._button_running:
+            try:
+                is_pressed = self._read_button()
+                current_time = time.time() * 1000  # ms
+
+                # Detect rising edge (button just pressed) with debounce
+                if is_pressed and not was_pressed:
+                    if current_time - self._last_button_time > self.button_debounce_ms:
+                        self._last_button_time = current_time
+                        logger.info("Exit button pressed!")
+
+                        # Run callback or default unlock
+                        if self._button_callback:
+                            try:
+                                self._button_callback()
+                            except Exception as e:
+                                logger.error(f"Button callback error: {e}")
+                        else:
+                            # Default: unlock the door
+                            self.unlock()
+
+                was_pressed = is_pressed
+
+                # Poll interval (10ms for responsive button detection)
+                time.sleep(0.01)
+
+            except Exception as e:
+                logger.error(f"Button monitor error: {e}")
+                time.sleep(0.1)
+
     def _set_lock_state(self, unlock: bool):
         """
         Set physical lock state.
@@ -203,23 +359,38 @@ class LockController:
 
     def cleanup(self):
         """Clean up GPIO resources."""
+        # Stop button monitor first
+        if self._button_running:
+            self.stop_button_monitor()
+
         if not self.mock_mode and self.gpio_initialized:
             try:
                 # Ensure locked state before cleanup
                 self._set_lock_state(False)
 
                 if self._gpiod_version == 2:
-                    # v2.x API - release request
+                    # v2.x API - release requests
+                    if self._button_request:
+                        self._button_request.release()
+                        self._button_request = None
+                        logger.info("Button GPIO released (v2)")
+
                     if self._request:
                         self._request.release()
                         self._request = None
-                        logger.info("GPIO request released (v2)")
+                        logger.info("Lock GPIO released (v2)")
                 else:
                     # v1.x API
-                    # Release GPIO line
+                    # Release button line
+                    if self._button_line:
+                        self._button_line.release()
+                        self._button_line = None
+                        logger.info("Button GPIO line released")
+
+                    # Release lock line
                     if self.line:
                         self.line.release()
-                        logger.info("GPIO line released")
+                        logger.info("Lock GPIO line released")
 
                     # Close chip
                     if self.chip:

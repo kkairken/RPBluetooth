@@ -203,7 +203,7 @@ class BLEProtocol:
             logger.error(f"BEGIN_UPSERT error: {e}")
             return {'type': self.RESP_ERROR, 'message': str(e)}
 
-    def handle_photo_chunk(self, command: Dict[str, Any]) -> Dict[str, Any]:
+    def handle_photo_chunk(self, command: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Handle PHOTO_CHUNK command.
 
@@ -211,7 +211,7 @@ class BLEProtocol:
             command: Command dictionary with base64 encoded chunk
 
         Returns:
-            Response dictionary
+            Response dictionary (only for last chunk or error), None for intermediate chunks
         """
         try:
             if not self.current_session:
@@ -228,7 +228,10 @@ class BLEProtocol:
                 return {'type': self.RESP_ERROR, 'message': 'Missing chunk data'}
 
             # Decode base64
-            chunk_bytes = base64.b64decode(chunk_data)
+            try:
+                chunk_bytes = base64.b64decode(chunk_data)
+            except Exception as e:
+                return {'type': self.RESP_ERROR, 'message': f'Invalid base64: {e}'}
 
             # Check size limit
             if self.photo_buffer.tell() + len(chunk_bytes) > self.max_photo_size:
@@ -238,7 +241,7 @@ class BLEProtocol:
             # Write chunk
             self.photo_buffer.write(chunk_bytes)
 
-            # Progress response
+            # Calculate progress
             progress_pct = int((chunk_index + 1) / total_chunks * 100)
 
             if is_last:
@@ -257,7 +260,8 @@ class BLEProtocol:
                 self.current_session['photos_received'] += 1
 
                 logger.info(
-                    f"Photo {self.current_session['photos_received']}/{self.current_session['num_photos']} received"
+                    f"Photo {self.current_session['photos_received']}/{self.current_session['num_photos']} received "
+                    f"({len(photo_data)} bytes, {total_chunks} chunks)"
                 )
 
                 # Reset buffer for next photo
@@ -270,12 +274,9 @@ class BLEProtocol:
                     'photos_total': self.current_session['num_photos']
                 }
             else:
-                return {
-                    'type': self.RESP_PROGRESS,
-                    'progress': progress_pct,
-                    'chunk_index': chunk_index,
-                    'total_chunks': total_chunks
-                }
+                # Intermediate chunk - NO notification (rely on BLE-level ACK)
+                # This minimizes BLE traffic and prevents disconnections
+                return None
 
         except Exception as e:
             logger.error(f"PHOTO_CHUNK error: {e}")

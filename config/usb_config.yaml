@@ -59,10 +59,16 @@ access:
 
 # Lock GPIO configuration (using libgpiod)
 lock:
-  gpio_pin: 17  # GPIO line number (BCM numbering)
+  gpio_pin: 17  # GPIO line number for lock relay (BCM numbering)
   gpio_chip: "gpiochip0"  # GPIO chip device name
   active_high: true  # true if relay activates on HIGH, false for LOW
   mock_mode: false  # Set to true for testing without GPIO
+
+  # Exit button configuration (optional)
+  # Connect button between GPIO pin and GND (uses internal pull-up)
+  button_pin: 27  # GPIO line number for exit button (BCM numbering), null to disable
+  button_active_low: true  # true if button connects to GND (default)
+  button_debounce_ms: 50  # Debounce time in milliseconds
 
 # Database configuration
 database:
