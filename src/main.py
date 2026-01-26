@@ -1,19 +1,30 @@
 """
 Main service runner for offline face access control system.
+Production-ready with watchdog, error recovery, and graceful shutdown.
 """
 import asyncio
 import argparse
 import logging
+import logging.handlers
 import sys
 import signal
+import os
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
 import time
+import traceback
 import cv2
 import numpy as np
 
 from config import load_config, SystemConfig
+
+# Systemd watchdog support
+try:
+    import sdnotify
+    SYSTEMD_AVAILABLE = True
+except ImportError:
+    SYSTEMD_AVAILABLE = False
 from db import Database
 from camera.usb_camera import USBCamera
 from camera.rtsp_camera import RTSPCamera
@@ -39,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 
 class FaceAccessSystem:
-    """Main face access control system."""
+    """Main face access control system with production features."""
 
     def __init__(self, config: SystemConfig):
         """
@@ -50,6 +61,19 @@ class FaceAccessSystem:
         """
         self.config = config
         self.running = False
+        self._shutdown_event = asyncio.Event()
+        self._error_count = 0
+        self._max_consecutive_errors = 10
+        self._last_watchdog_ping = 0
+
+        # Systemd watchdog
+        self._sd_notifier = None
+        if SYSTEMD_AVAILABLE:
+            try:
+                self._sd_notifier = sdnotify.SystemdNotifier()
+                logger.info("Systemd watchdog enabled")
+            except Exception as e:
+                logger.warning(f"Failed to initialize systemd notifier: {e}")
 
         # Initialize components
         logger.info("Initializing Face Access Control System...")
@@ -241,90 +265,120 @@ class FaceAccessSystem:
         return self.db.get_system_status()
 
     async def recognition_loop(self):
-        """Main face recognition loop."""
+        """Main face recognition loop with error recovery."""
         logger.info("Starting recognition loop")
 
-        # Open camera
-        if not self.camera.open():
-            logger.error("Failed to open camera")
-            return
+        # Open camera with retries
+        camera_retries = 3
+        for attempt in range(camera_retries):
+            if self.camera.open():
+                break
+            logger.warning(f"Camera open attempt {attempt + 1}/{camera_retries} failed")
+            await asyncio.sleep(2)
+        else:
+            raise RuntimeError("Failed to open camera after multiple attempts")
 
         try:
             frame_skip = 2  # Process every Nth frame
             frame_count = 0
+            consecutive_frame_errors = 0
+            max_frame_errors = 30  # ~3 seconds at 10fps
 
             while self.running:
-                # Read frame
-                ret, frame = self.camera.read_frame()
-                if not ret or frame is None:
-                    await asyncio.sleep(0.1)
-                    continue
+                try:
+                    # Read frame
+                    ret, frame = self.camera.read_frame()
+                    if not ret or frame is None:
+                        consecutive_frame_errors += 1
+                        if consecutive_frame_errors >= max_frame_errors:
+                            logger.error("Too many consecutive frame errors, reopening camera")
+                            self.camera.release()
+                            await asyncio.sleep(1)
+                            if not self.camera.open():
+                                raise RuntimeError("Failed to reopen camera")
+                            consecutive_frame_errors = 0
+                        await asyncio.sleep(0.1)
+                        continue
 
-                frame_count += 1
-                if frame_count % frame_skip != 0:
-                    await asyncio.sleep(0.01)
-                    continue
+                    consecutive_frame_errors = 0  # Reset on success
+                    frame_count += 1
 
-                # Detect faces
-                faces = self.detector.detect(frame)
+                    if frame_count % frame_skip != 0:
+                        await asyncio.sleep(0.01)
+                        continue
 
-                if not faces:
-                    await asyncio.sleep(0.1)
-                    continue
+                    # Detect faces
+                    faces = self.detector.detect(frame)
 
-                # Process largest face
-                largest_face = max(faces, key=lambda f: f[2] * f[3])
+                    if not faces:
+                        await asyncio.sleep(0.1)
+                        continue
 
-                # Align
-                aligned = self.aligner.align(frame, largest_face)
-                if aligned is None:
-                    continue
+                    # Process largest face
+                    largest_face = max(faces, key=lambda f: f[2] * f[3])
 
-                # Compute embedding
-                embedding = self.embedder.compute_embedding(aligned)
-                if embedding is None:
-                    continue
+                    # Align
+                    aligned = self.aligner.align(frame, largest_face)
+                    if aligned is None:
+                        continue
 
-                # Get active employees with embeddings
-                employees_data = self.db.get_active_employees_with_embeddings()
+                    # Compute embedding
+                    embedding = self.embedder.compute_embedding(aligned)
+                    if embedding is None:
+                        continue
 
-                # Match
-                employee_id, score, display_name = self.matcher.find_best_match(
-                    embedding,
-                    employees_data
-                )
+                    # Get active employees with embeddings
+                    employees_data = self.db.get_active_employees_with_embeddings()
 
-                # Get employee record
-                employee = None
-                if employee_id:
-                    employee = self.db.get_employee(employee_id)
+                    # Match
+                    employee_id, score, display_name = self.matcher.find_best_match(
+                        embedding,
+                        employees_data
+                    )
 
-                # Process access attempt
-                granted, reason, metadata = self.access_controller.process_access_attempt(
-                    employee,
-                    score,
-                    self.config.face.similarity_threshold
-                )
+                    # Get employee record
+                    employee = None
+                    if employee_id:
+                        employee = self.db.get_employee(employee_id)
 
-                # Log attempt
-                self.db.log_access_attempt(
-                    event_type='face_recognition',
-                    result='granted' if granted else 'denied',
-                    employee_id=employee_id,
-                    matched_employee_id=employee_id,
-                    similarity_score=score,
-                    reason=reason,
-                    metadata=metadata
-                )
+                    # Process access attempt
+                    granted, reason, metadata = self.access_controller.process_access_attempt(
+                        employee,
+                        score,
+                        self.config.face.similarity_threshold
+                    )
 
-                if granted:
-                    logger.info(f"Access GRANTED: {employee_id} ({display_name}) - score: {score:.3f}")
-                    self.lock.unlock()
-                else:
-                    logger.info(f"Access DENIED: {reason} - score: {score:.3f}")
+                    # Log attempt (with error handling)
+                    try:
+                        self.db.log_access_attempt(
+                            event_type='face_recognition',
+                            result='granted' if granted else 'denied',
+                            employee_id=employee_id,
+                            matched_employee_id=employee_id,
+                            similarity_score=score,
+                            reason=reason,
+                            metadata=metadata
+                        )
+                    except Exception as db_err:
+                        logger.error(f"Failed to log access attempt: {db_err}")
 
-                # Cooldown
-                await asyncio.sleep(self.config.access.cooldown_sec)
+                    if granted:
+                        logger.info(f"Access GRANTED: {employee_id} ({display_name}) - score: {score:.3f}")
+                        try:
+                            self.lock.unlock()
+                        except Exception as lock_err:
+                            logger.error(f"Failed to unlock: {lock_err}")
+                    else:
+                        logger.debug(f"Access DENIED: {reason} - score: {score:.3f}")
+
+                    # Cooldown
+                    await asyncio.sleep(self.config.access.cooldown_sec)
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception as loop_err:
+                    logger.error(f"Error in recognition iteration: {loop_err}")
+                    await asyncio.sleep(0.5)
 
         finally:
             self.camera.release()
@@ -334,39 +388,166 @@ class FaceAccessSystem:
         """Callback when exit button is pressed."""
         logger.info("Exit button pressed - unlocking door")
         # Log the event
-        self.db.log_access_attempt(
-            event_type='exit_button',
-            result='granted',
-            reason='Exit button pressed'
-        )
+        try:
+            self.db.log_access_attempt(
+                event_type='exit_button',
+                result='granted',
+                reason='Exit button pressed'
+            )
+        except Exception as e:
+            logger.error(f"Failed to log exit button event: {e}")
         # Unlock is called automatically by LockController
 
+    def _notify_watchdog(self):
+        """Notify systemd watchdog that we're alive."""
+        if self._sd_notifier:
+            try:
+                self._sd_notifier.notify("WATCHDOG=1")
+                self._last_watchdog_ping = time.time()
+            except Exception as e:
+                logger.warning(f"Watchdog notify failed: {e}")
+
+    def _notify_ready(self):
+        """Notify systemd that service is ready."""
+        if self._sd_notifier:
+            try:
+                self._sd_notifier.notify("READY=1")
+                logger.info("Notified systemd: service ready")
+            except Exception as e:
+                logger.warning(f"Ready notify failed: {e}")
+
+    def _notify_stopping(self):
+        """Notify systemd that service is stopping."""
+        if self._sd_notifier:
+            try:
+                self._sd_notifier.notify("STOPPING=1")
+            except Exception:
+                pass
+
+    async def _watchdog_loop(self):
+        """Background task to ping systemd watchdog."""
+        while self.running:
+            self._notify_watchdog()
+            await asyncio.sleep(15)  # Ping every 15 seconds (WatchdogSec=60)
+
     async def run(self):
-        """Run the system."""
+        """Run the system with production error handling."""
         self.running = True
 
         # Start exit button monitor if configured
         if self.config.lock.button_pin is not None:
             self.lock.start_button_monitor(callback=self._on_exit_button_pressed)
 
+        # Notify systemd we're ready
+        self._notify_ready()
+
         # Start tasks
         tasks = [
-            asyncio.create_task(self.recognition_loop()),
-            asyncio.create_task(self.ble_server.start())
+            asyncio.create_task(self._watchdog_loop(), name="watchdog"),
+            asyncio.create_task(self._recognition_loop_wrapper(), name="recognition"),
+            asyncio.create_task(self._ble_server_wrapper(), name="ble_server")
         ]
+        shutdown_task = asyncio.create_task(self._shutdown_event.wait(), name="shutdown")
 
         try:
-            await asyncio.gather(*tasks)
+            # Wait for shutdown or task failure
+            done, pending = await asyncio.wait(
+                tasks + [shutdown_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+
+            # Check for exceptions
+            for task in done:
+                if task is shutdown_task:
+                    continue
+                if task.exception():
+                    logger.error(f"Task {task.get_name()} failed: {task.exception()}")
+
+            # Cancel pending tasks
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
         except asyncio.CancelledError:
             logger.info("System shutting down")
+        except Exception as e:
+            logger.error(f"Unexpected error in run loop: {e}")
+            logger.error(traceback.format_exc())
+
+    async def _recognition_loop_wrapper(self):
+        """Wrapper for recognition loop with automatic restart on errors."""
+        restart_delay = 5  # seconds
+        max_restart_delay = 60
+
+        while self.running:
+            try:
+                await self.recognition_loop()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._error_count += 1
+                logger.error(f"Recognition loop error ({self._error_count}): {e}")
+                logger.error(traceback.format_exc())
+
+                if self._error_count >= self._max_consecutive_errors:
+                    logger.critical("Too many consecutive errors, stopping recognition")
+                    break
+
+                # Exponential backoff
+                delay = min(restart_delay * (2 ** (self._error_count - 1)), max_restart_delay)
+                logger.info(f"Restarting recognition loop in {delay} seconds...")
+                await asyncio.sleep(delay)
+            else:
+                # Reset error count on clean exit
+                self._error_count = 0
+
+    async def _ble_server_wrapper(self):
+        """Wrapper for BLE server with automatic restart."""
+        restart_delay = 5
+
+        while self.running:
+            try:
+                await self.ble_server.start()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"BLE server error: {e}")
+                logger.error(traceback.format_exc())
+
+                if not self.running:
+                    break
+
+                logger.info(f"Restarting BLE server in {restart_delay} seconds...")
+                await asyncio.sleep(restart_delay)
 
     async def stop(self):
-        """Stop the system."""
+        """Stop the system gracefully."""
         logger.info("Stopping system...")
+        self._notify_stopping()
         self.running = False
-        await self.ble_server.stop()
-        self.lock.cleanup()
-        self.db.close()
+        self._shutdown_event.set()
+
+        # Stop components in order
+        try:
+            await asyncio.wait_for(self.ble_server.stop(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("BLE server stop timed out")
+        except Exception as e:
+            logger.error(f"Error stopping BLE server: {e}")
+
+        try:
+            self.lock.cleanup()
+        except Exception as e:
+            logger.error(f"Error cleaning up lock: {e}")
+
+        try:
+            self.db.close()
+        except Exception as e:
+            logger.error(f"Error closing database: {e}")
+
         logger.info("System stopped")
 
 
@@ -387,6 +568,54 @@ def export_logs(db_path: str, output_file: str):
         json.dump(logs, f, indent=2)
 
     logger.info(f"Exported {len(logs)} log entries to {output_file}")
+
+
+def setup_logging(log_level: str, log_dir: str = "logs"):
+    """Setup production logging with rotation."""
+    # Create logs directory
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+
+    # Root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, log_level))
+
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_format = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    console_handler.setFormatter(console_format)
+    root_logger.addHandler(console_handler)
+
+    # File handler with rotation (10MB, keep 5 files)
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_path / 'face_access.log',
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_format = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    file_handler.setFormatter(file_format)
+    root_logger.addHandler(file_handler)
+
+    # Error file (only errors)
+    error_handler = logging.handlers.RotatingFileHandler(
+        log_path / 'errors.log',
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding='utf-8'
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(file_format)
+    root_logger.addHandler(error_handler)
+
+    return root_logger
 
 
 def main():
@@ -410,18 +639,22 @@ def main():
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
         help='Logging level'
     )
+    parser.add_argument(
+        '--log-dir',
+        type=str,
+        default='logs',
+        help='Directory for log files'
+    )
 
     args = parser.parse_args()
 
     # Setup logging
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler('face_access.log')
-        ]
-    )
+    setup_logging(args.log_level, args.log_dir)
+    logger.info("=" * 60)
+    logger.info("RP3 Face Access Control System starting...")
+    logger.info(f"Config: {args.config}")
+    logger.info(f"PID: {os.getpid()}")
+    logger.info("=" * 60)
 
     # Load config
     try:
@@ -435,25 +668,47 @@ def main():
         export_logs(config.database.path, args.export_logs)
         return
 
-    # Create and run system
-    system = FaceAccessSystem(config)
+    # Create system
+    try:
+        system = FaceAccessSystem(config)
+    except Exception as e:
+        logger.critical(f"Failed to initialize system: {e}")
+        logger.critical(traceback.format_exc())
+        sys.exit(1)
 
     # Signal handlers
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     def signal_handler(sig, frame):
-        logger.info("Received shutdown signal")
-        asyncio.create_task(system.stop())
+        logger.info(f"Received signal {sig}, initiating shutdown...")
+        loop.call_soon_threadsafe(
+            lambda: asyncio.create_task(system.stop())
+        )
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     # Run async main loop
+    exit_code = 0
     try:
-        asyncio.run(system.run())
+        loop.run_until_complete(system.run())
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception as e:
-        logger.error(f"System error: {e}", exc_info=True)
-        sys.exit(1)
+        logger.critical(f"Fatal system error: {e}")
+        logger.critical(traceback.format_exc())
+        exit_code = 1
+    finally:
+        # Cleanup
+        try:
+            loop.run_until_complete(system.stop())
+        except Exception:
+            pass
+        loop.close()
+        logger.info("System shutdown complete")
+
+    sys.exit(exit_code)
 
 
 if __name__ == '__main__':

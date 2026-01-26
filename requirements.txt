@@ -20,6 +20,9 @@ PyGObject>=3.42.0
 # BLE Client support (optional - for ble_register_client.py)
 bleak>=0.20.0
 
+# Systemd watchdog support (production)
+sdnotify>=0.3.0
+
 # GPIO support (Raspberry Pi only) - using libgpiod (modern interface)
 # RECOMMENDED: Use system package:
 #   sudo apt install python3-libgpiod
