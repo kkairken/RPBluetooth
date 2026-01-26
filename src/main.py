@@ -98,7 +98,8 @@ class FaceAccessSystem:
         )
         self.access_controller = AccessController(
             max_attempts_per_minute=config.access.max_attempts_per_minute,
-            cooldown_sec=config.access.cooldown_sec
+            cooldown_sec=config.access.cooldown_sec,
+            granted_lockout_sec=config.access.granted_lockout_sec
         )
         self.lock = LockController(
             gpio_pin=config.lock.gpio_pin,

@@ -17,7 +17,8 @@ class AccessController:
     def __init__(
         self,
         max_attempts_per_minute: int = 10,
-        cooldown_sec: float = 2.0
+        cooldown_sec: float = 2.0,
+        granted_lockout_sec: float = 30.0
     ):
         """
         Initialize access controller.
@@ -25,13 +26,18 @@ class AccessController:
         Args:
             max_attempts_per_minute: Max access attempts per minute (rate limit)
             cooldown_sec: Cooldown period between access attempts
+            granted_lockout_sec: Lockout period after successful access (prevents repeated opens)
         """
         self.max_attempts_per_minute = max_attempts_per_minute
         self.cooldown_sec = cooldown_sec
+        self.granted_lockout_sec = granted_lockout_sec
 
         # Rate limiting tracking
         self.attempt_timestamps: Dict[str, list] = defaultdict(list)
         self.last_attempt_time: float = 0.0
+
+        # Track last successful access per employee (to prevent repeated opens)
+        self.last_granted_time: Dict[str, float] = {}
 
     def check_access_period(
         self,
@@ -156,6 +162,31 @@ class AccessController:
 
         return True, "Rate limit OK"
 
+    def check_granted_lockout(self, employee_id: str) -> Tuple[bool, str]:
+        """
+        Check if employee is in lockout period after successful access.
+        Prevents door from opening repeatedly for same person.
+
+        Args:
+            employee_id: Employee ID
+
+        Returns:
+            Tuple of (is_allowed, reason)
+        """
+        current_time = time.time()
+        last_granted = self.last_granted_time.get(employee_id, 0.0)
+        time_since_granted = current_time - last_granted
+
+        if time_since_granted < self.granted_lockout_sec:
+            remaining = self.granted_lockout_sec - time_since_granted
+            return False, f"Recently granted ({remaining:.0f}s remaining)"
+
+        return True, "No lockout"
+
+    def record_granted_access(self, employee_id: str):
+        """Record successful access for lockout tracking."""
+        self.last_granted_time[employee_id] = time.time()
+
     def process_access_attempt(
         self,
         employee: Optional[Dict[str, Any]],
@@ -189,6 +220,11 @@ class AccessController:
         metadata['employee_id'] = employee_id
         metadata['display_name'] = employee.get('display_name')
 
+        # Check if recently granted (prevent repeated opens for same person)
+        lockout_ok, reason = self.check_granted_lockout(employee_id)
+        if not lockout_ok:
+            return False, reason, metadata
+
         # Check rate limit
         rate_ok, reason = self.check_rate_limit(employee_id)
         if not rate_ok:
@@ -198,5 +234,8 @@ class AccessController:
         access_ok, reason = self.validate_access(employee)
         if not access_ok:
             return False, reason, metadata
+
+        # Record successful access for lockout
+        self.record_granted_access(employee_id)
 
         return True, "Access granted", metadata

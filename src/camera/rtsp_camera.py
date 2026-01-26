@@ -20,7 +20,8 @@ class RTSPCamera(CameraBase):
         transport: str = "tcp",
         width: int = 640,
         height: int = 480,
-        reconnect_attempts: int = 3
+        reconnect_attempts: int = 3,
+        buffer_flush_count: int = 5
     ):
         """
         Initialize RTSP camera.
@@ -31,12 +32,14 @@ class RTSPCamera(CameraBase):
             width: Desired frame width (for resizing)
             height: Desired frame height (for resizing)
             reconnect_attempts: Number of reconnection attempts
+            buffer_flush_count: Number of frames to skip to get fresh frame
         """
         self.rtsp_url = rtsp_url
         self.transport = transport.lower()
         self.width = width
         self.height = height
         self.reconnect_attempts = reconnect_attempts
+        self.buffer_flush_count = buffer_flush_count
         self.cap: Optional[cv2.VideoCapture] = None
 
     def _build_gstreamer_pipeline(self) -> str:
@@ -100,6 +103,7 @@ class RTSPCamera(CameraBase):
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
         Read a frame from RTSP stream.
+        Flushes buffer to get the most recent frame.
 
         Returns:
             Tuple of (success, frame)
@@ -108,10 +112,19 @@ class RTSPCamera(CameraBase):
             return False, None
 
         try:
-            ret, frame = self.cap.read()
+            # Flush buffer by grabbing frames without decoding
+            # This discards old buffered frames to get the latest
+            for _ in range(self.buffer_flush_count):
+                self.cap.grab()
+
+            # Now retrieve the latest frame
+            ret, frame = self.cap.retrieve()
             if not ret or frame is None:
-                logger.warning("Failed to read frame from RTSP stream")
-                return False, None
+                # Fallback to regular read
+                ret, frame = self.cap.read()
+                if not ret or frame is None:
+                    logger.warning("Failed to read frame from RTSP stream")
+                    return False, None
 
             # Resize if needed
             if frame.shape[1] != self.width or frame.shape[0] != self.height:

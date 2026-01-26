@@ -60,6 +60,7 @@ class AccessConfig:
     unlock_duration_sec: float = 3.0
     cooldown_sec: float = 2.0
     max_attempts_per_minute: int = 10
+    granted_lockout_sec: float = 30.0  # Lockout after successful access (prevents repeated opens)
 
 
 @dataclass
@@ -166,7 +167,8 @@ def load_config(config_path: str) -> SystemConfig:
             admin_gpio_pin=access_data.get('admin_gpio_pin'),
             unlock_duration_sec=access_data.get('unlock_duration_sec', 3.0),
             cooldown_sec=access_data.get('cooldown_sec', 2.0),
-            max_attempts_per_minute=access_data.get('max_attempts_per_minute', 10)
+            max_attempts_per_minute=access_data.get('max_attempts_per_minute', 10),
+            granted_lockout_sec=access_data.get('granted_lockout_sec', 30.0)
         )
 
         # Parse lock config
