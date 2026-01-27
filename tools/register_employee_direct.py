@@ -26,7 +26,10 @@ import numpy as np
 from db import Database
 from face.detector import FaceDetector
 from face.align import FaceAligner
-from face.embedder_onnx import FaceEmbedder
+try:
+    from face.embedder_onnx import FaceEmbedder
+except ImportError:
+    from face.embedder_opencv import FaceEmbedderOpenCV as FaceEmbedder
 from face.quality import FaceQualityChecker
 
 
