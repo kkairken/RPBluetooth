@@ -173,8 +173,7 @@ class FaceAccessSystem:
                 rtsp_url=self.config.camera.rtsp_url,
                 transport=self.config.camera.rtsp_transport,
                 width=self.config.camera.width,
-                height=self.config.camera.height,
-                buffer_flush_count=2  # Reduced for faster response
+                height=self.config.camera.height
             )
         elif self.config.camera.type == 'picamera':
             if not PICAMERA_AVAILABLE:
@@ -425,7 +424,11 @@ class FaceAccessSystem:
             )
         except Exception as e:
             logger.error(f"Failed to log exit button event: {e}")
-        # Unlock is called automatically by LockController
+        # Unlock the door
+        try:
+            self.lock.unlock()
+        except Exception as e:
+            logger.error(f"Failed to unlock door: {e}")
 
     def _notify_watchdog(self):
         """Notify systemd watchdog that we're alive."""

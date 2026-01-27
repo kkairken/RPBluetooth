@@ -265,15 +265,24 @@ class LockController:
         """Background thread loop for monitoring button presses."""
         logger.debug("Button monitor loop started")
         was_pressed = False
+        # Cooldown after button press (prevent rapid re-triggers)
+        button_cooldown_ms = 3000  # 3 seconds cooldown after press
 
         while self._button_running:
             try:
                 is_pressed = self._read_button()
                 current_time = time.time() * 1000  # ms
 
+                # Check cooldown first
+                time_since_last = current_time - self._last_button_time
+                if time_since_last < button_cooldown_ms:
+                    was_pressed = is_pressed
+                    time.sleep(0.01)
+                    continue
+
                 # Detect rising edge (button just pressed) with debounce
                 if is_pressed and not was_pressed:
-                    if current_time - self._last_button_time > self.button_debounce_ms:
+                    if time_since_last > self.button_debounce_ms:
                         self._last_button_time = current_time
                         logger.info("Exit button pressed!")
 
