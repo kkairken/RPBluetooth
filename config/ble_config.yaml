@@ -3,8 +3,9 @@
 
 # Camera configuration
 camera:
-  type: usb
-  device_id: 0  # USB camera device ID (usually 0)
+  type: rtsp
+  rtsp_url: "rtsp://admin:129510@192.168.1.33:554/stream"  # RTSP stream URL
+  rtsp_transport: tcp  # tcp or udp
   width: 640
   height: 480
   fps: 15
@@ -13,7 +14,7 @@ camera:
 face:
   # Path to InsightFace ONNX model
   # Download model and place in models/ directory
-  onnx_model_path: "models/insightface_medium.onnx"
+  onnx_model_path: "models/insightface_int8_qdq.onnx"
 
   # Detector type: opencv_haar, mediapipe, or none
   detector_type: opencv_haar
@@ -41,7 +42,7 @@ ble:
 
   # HMAC authentication
   hmac_enabled: true
-  shared_secret: "change_this_secret_key_in_production"
+  shared_secret: "hsepassword"
 
   # IMPORTANT: Set to true to use REAL BLE server (requires BlueZ)
   use_real_ble: true
@@ -56,7 +57,7 @@ access:
   # admin_gpio_pin: 23
 
   # Lock control
-  unlock_duration_sec: 3.0
+  unlock_duration_sec: 5.0
   cooldown_sec: 2.0
   max_attempts_per_minute: 10
 
@@ -64,7 +65,7 @@ access:
 lock:
   gpio_pin: 17  # GPIO line number (BCM numbering)
   gpio_chip: "gpiochip0"  # GPIO chip device name
-  active_high: true  # true if relay activates on HIGH, false for LOW
+  active_high: false  # true if relay activates on HIGH, false for LOW
   mock_mode: false  # Set to true for testing without GPIO
 
 # Database configuration
