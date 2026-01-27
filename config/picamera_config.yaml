@@ -46,9 +46,9 @@ ble:
 access:
   admin_mode_enabled: true
   unlock_duration_sec: 3.0
-  cooldown_sec: 2.0
-  max_attempts_per_minute: 10
-  granted_lockout_sec: 30.0
+  cooldown_sec: 0.5  # Reduced from 2.0 for faster recognition
+  max_attempts_per_minute: 30  # Increased to allow faster attempts
+  granted_lockout_sec: 10.0  # Reduced from 30.0 for faster re-recognition
 
 # Lock GPIO configuration (using libgpiod)
 lock:

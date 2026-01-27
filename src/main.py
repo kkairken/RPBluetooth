@@ -330,7 +330,9 @@ class FaceAccessSystem:
                     consecutive_frame_errors = 0  # Reset on success
 
                     # Detect faces
+                    t_detect_start = time.time()
                     faces = self.detector.detect(frame)
+                    t_detect = time.time() - t_detect_start
 
                     if not faces:
                         # No face - quick loop, minimal delay
@@ -339,24 +341,44 @@ class FaceAccessSystem:
 
                     # Process largest face
                     largest_face = max(faces, key=lambda f: f[2] * f[3])
+                    face_x, face_y, face_w, face_h = largest_face
+                    logger.info(f"Face DETECTED: size={face_w}x{face_h} at ({face_x},{face_y}), detect_time={t_detect*1000:.1f}ms")
 
                     # Align
+                    t_align_start = time.time()
                     aligned = self.aligner.align(frame, largest_face)
+                    t_align = time.time() - t_align_start
                     if aligned is None:
+                        logger.warning(f"Face alignment failed, align_time={t_align*1000:.1f}ms")
                         continue
 
                     # Compute embedding
+                    t_embed_start = time.time()
                     embedding = self.embedder.compute_embedding(aligned)
+                    t_embed = time.time() - t_embed_start
                     if embedding is None:
+                        logger.warning(f"Embedding computation failed, embed_time={t_embed*1000:.1f}ms")
                         continue
 
                     # Get active employees with embeddings
+                    t_db_start = time.time()
                     employees_data = self.db.get_active_employees_with_embeddings()
+                    t_db = time.time() - t_db_start
 
                     # Match
+                    t_match_start = time.time()
                     employee_id, score, display_name = self.matcher.find_best_match(
                         embedding,
                         employees_data
+                    )
+                    t_match = time.time() - t_match_start
+
+                    # Log timing summary
+                    total_time = t_detect + t_align + t_embed + t_db + t_match
+                    logger.info(
+                        f"Recognition pipeline: detect={t_detect*1000:.0f}ms, align={t_align*1000:.0f}ms, "
+                        f"embed={t_embed*1000:.0f}ms, db={t_db*1000:.0f}ms, match={t_match*1000:.0f}ms, "
+                        f"TOTAL={total_time*1000:.0f}ms | best_match={employee_id}, score={score:.3f}"
                     )
 
                     # Get employee record
@@ -386,7 +408,7 @@ class FaceAccessSystem:
                         logger.error(f"Failed to log access attempt: {db_err}")
 
                     if granted:
-                        logger.info(f"Access GRANTED: {employee_id} ({display_name}) - score: {score:.3f}")
+                        logger.info(f">>> Access GRANTED: {employee_id} ({display_name}) - score: {score:.3f}")
                         # Check if lock is already unlocking (additional safety)
                         if self.lock.is_unlocking():
                             logger.debug(f"Lock already unlocking, skipping for {employee_id}")
@@ -396,9 +418,10 @@ class FaceAccessSystem:
                             except Exception as lock_err:
                                 logger.error(f"Failed to unlock: {lock_err}")
                         # Cooldown only after successful grant
+                        logger.info(f"Cooldown: sleeping {self.config.access.cooldown_sec}s after grant")
                         await asyncio.sleep(self.config.access.cooldown_sec)
                     else:
-                        logger.debug(f"Access DENIED: {reason} - score: {score:.3f}")
+                        logger.info(f"<<< Access DENIED: {reason} - score: {score:.3f}")
                         # Short delay for denied attempts (lockout handles repeat prevention)
                         await asyncio.sleep(0.1)
 

@@ -26,6 +26,9 @@ class Database:
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn: Optional[sqlite3.Connection] = None
+        # Embeddings cache for faster recognition
+        self._embeddings_cache: Optional[List[Tuple[Dict[str, Any], List[np.ndarray]]]] = None
+        self._cache_dirty = True
         self._init_db()
 
     def _init_db(self):
@@ -115,6 +118,7 @@ class Database:
               int(is_active), now, now))
 
         self.conn.commit()
+        self._cache_dirty = True  # Invalidate cache
         logger.info(f"Upserted employee {employee_id}")
 
     def add_embedding(
@@ -147,6 +151,7 @@ class Database:
 
         self.conn.commit()
         embedding_id = cursor.lastrowid
+        self._cache_dirty = True  # Invalidate cache
         logger.info(f"Added embedding {embedding_id} for employee {employee_id}")
         return embedding_id
 
@@ -160,6 +165,7 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM embeddings WHERE employee_id = ?", (employee_id,))
         self.conn.commit()
+        self._cache_dirty = True  # Invalidate cache
         logger.info(f"Deleted embeddings for employee {employee_id}")
 
     def get_employee(self, employee_id: str) -> Optional[Dict[str, Any]]:
@@ -183,10 +189,15 @@ class Database:
     def get_active_employees_with_embeddings(self) -> List[Tuple[Dict[str, Any], List[np.ndarray]]]:
         """
         Get all active employees with their embeddings.
+        Uses in-memory cache for faster recognition.
 
         Returns:
             List of (employee_dict, embeddings_list) tuples
         """
+        # Return cached data if available and not dirty
+        if not self._cache_dirty and self._embeddings_cache is not None:
+            return self._embeddings_cache
+
         cursor = self.conn.cursor()
 
         # Get active employees
@@ -213,6 +224,11 @@ class Database:
 
             if embeddings:  # Only include employees with at least one embedding
                 result.append((emp, embeddings))
+
+        # Update cache
+        self._embeddings_cache = result
+        self._cache_dirty = False
+        logger.debug(f"Embeddings cache refreshed: {len(result)} employees")
 
         return result
 
@@ -275,6 +291,7 @@ class Database:
         updated = cursor.rowcount > 0
 
         if updated:
+            self._cache_dirty = True  # Invalidate cache
             logger.info(f"Deactivated employee {employee_id}")
         else:
             logger.warning(f"Employee {employee_id} not found for deactivation")
@@ -298,6 +315,7 @@ class Database:
         deleted = cursor.rowcount > 0
 
         if deleted:
+            self._cache_dirty = True  # Invalidate cache
             logger.info(f"Deleted employee {employee_id}")
         else:
             logger.warning(f"Employee {employee_id} not found for deletion")

@@ -16,9 +16,9 @@ class AccessController:
 
     def __init__(
         self,
-        max_attempts_per_minute: int = 10,
-        cooldown_sec: float = 2.0,
-        granted_lockout_sec: float = 30.0
+        max_attempts_per_minute: int = 30,
+        cooldown_sec: float = 0.5,
+        granted_lockout_sec: float = 10.0
     ):
         """
         Initialize access controller.

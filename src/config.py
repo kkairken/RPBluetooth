@@ -62,9 +62,9 @@ class AccessConfig:
     admin_mode_enabled: bool = False
     admin_gpio_pin: Optional[int] = None
     unlock_duration_sec: float = 3.0
-    cooldown_sec: float = 2.0
-    max_attempts_per_minute: int = 10
-    granted_lockout_sec: float = 30.0  # Lockout after successful access (prevents repeated opens)
+    cooldown_sec: float = 0.5  # Reduced from 2.0 for faster recognition
+    max_attempts_per_minute: int = 30  # Increased to allow faster attempts
+    granted_lockout_sec: float = 10.0  # Reduced from 30.0 for faster re-recognition
 
 
 @dataclass
@@ -173,9 +173,9 @@ def load_config(config_path: str) -> SystemConfig:
             admin_mode_enabled=access_data.get('admin_mode_enabled', False),
             admin_gpio_pin=access_data.get('admin_gpio_pin'),
             unlock_duration_sec=access_data.get('unlock_duration_sec', 3.0),
-            cooldown_sec=access_data.get('cooldown_sec', 2.0),
-            max_attempts_per_minute=access_data.get('max_attempts_per_minute', 10),
-            granted_lockout_sec=access_data.get('granted_lockout_sec', 30.0)
+            cooldown_sec=access_data.get('cooldown_sec', 0.5),
+            max_attempts_per_minute=access_data.get('max_attempts_per_minute', 30),
+            granted_lockout_sec=access_data.get('granted_lockout_sec', 10.0)
         )
 
         # Parse lock config
