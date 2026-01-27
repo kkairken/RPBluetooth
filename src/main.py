@@ -393,10 +393,14 @@ class FaceAccessSystem:
 
                     if granted:
                         logger.info(f"Access GRANTED: {employee_id} ({display_name}) - score: {score:.3f}")
-                        try:
-                            self.lock.unlock()
-                        except Exception as lock_err:
-                            logger.error(f"Failed to unlock: {lock_err}")
+                        # Check if lock is already unlocking (additional safety)
+                        if self.lock.is_unlocking():
+                            logger.debug(f"Lock already unlocking, skipping for {employee_id}")
+                        else:
+                            try:
+                                self.lock.unlock()
+                            except Exception as lock_err:
+                                logger.error(f"Failed to unlock: {lock_err}")
                     else:
                         logger.debug(f"Access DENIED: {reason} - score: {score:.3f}")
 

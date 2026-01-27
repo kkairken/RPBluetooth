@@ -66,6 +66,10 @@ class LockController:
         self._last_button_time = 0
         self._button_callback: Optional[Callable[[], None]] = None
 
+        # Lock state tracking (prevents multiple unlock calls while already unlocking)
+        self._is_unlocking = False
+        self._unlock_lock = threading.Lock()
+
         if not mock_mode:
             self._init_gpio()
         else:
@@ -332,30 +336,47 @@ class LockController:
     def unlock(self, duration: Optional[float] = None):
         """
         Unlock the door for a specified duration.
+        Prevents multiple simultaneous unlock calls.
 
         Args:
             duration: Override default unlock duration (seconds)
         """
-        if duration is None:
-            duration = self.unlock_duration
+        # Prevent multiple unlock calls while already unlocking
+        with self._unlock_lock:
+            if self._is_unlocking:
+                logger.debug("Unlock already in progress, skipping duplicate call")
+                return
+            self._is_unlocking = True
 
-        logger.info(f"Unlocking for {duration} seconds")
+        try:
+            if duration is None:
+                duration = self.unlock_duration
 
-        # Unlock
-        self._set_lock_state(True)
+            logger.info(f"Unlocking for {duration} seconds")
 
-        # Wait
-        time.sleep(duration)
+            # Unlock
+            self._set_lock_state(True)
 
-        # Lock again
-        self._set_lock_state(False)
+            # Wait
+            time.sleep(duration)
 
-        logger.info("Lock re-engaged")
+            # Lock again
+            self._set_lock_state(False)
+
+            logger.info("Lock re-engaged")
+        finally:
+            with self._unlock_lock:
+                self._is_unlocking = False
 
     def lock(self):
         """Immediately lock the door."""
         logger.info("Locking door")
         self._set_lock_state(False)
+
+    def is_unlocking(self) -> bool:
+        """Check if unlock is currently in progress."""
+        with self._unlock_lock:
+            return self._is_unlocking
 
     def cleanup(self):
         """Clean up GPIO resources."""

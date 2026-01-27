@@ -179,13 +179,23 @@ class AccessController:
 
         if time_since_granted < self.granted_lockout_sec:
             remaining = self.granted_lockout_sec - time_since_granted
+            logger.debug(
+                f"Lockout active for {employee_id}: {time_since_granted:.1f}s elapsed, "
+                f"{remaining:.1f}s remaining (lockout={self.granted_lockout_sec}s)"
+            )
             return False, f"Recently granted ({remaining:.0f}s remaining)"
 
+        logger.debug(
+            f"No lockout for {employee_id}: {time_since_granted:.1f}s since last grant "
+            f"(lockout={self.granted_lockout_sec}s)"
+        )
         return True, "No lockout"
 
     def record_granted_access(self, employee_id: str):
         """Record successful access for lockout tracking."""
-        self.last_granted_time[employee_id] = time.time()
+        current_time = time.time()
+        self.last_granted_time[employee_id] = current_time
+        logger.info(f"Recorded granted access for {employee_id} at {current_time:.3f}")
 
     def process_access_attempt(
         self,
