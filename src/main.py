@@ -356,6 +356,13 @@ class FaceAccessSystem:
             consecutive_frame_errors = 0
             max_frame_errors = 30  # ~3 seconds at 10fps
 
+            # Face tracking optimization - skip embedding if same face detected
+            last_face_pos = None  # (x, y, w, h)
+            last_face_time = 0
+            face_stable_count = 0
+            FACE_STABLE_THRESHOLD = 3  # Need 3 stable detections before embedding
+            FACE_POSITION_TOLERANCE = 50  # pixels
+
             while self.running:
                 try:
                     # Read frame
@@ -380,14 +387,36 @@ class FaceAccessSystem:
                     t_detect = time.time() - t_detect_start
 
                     if not faces:
-                        # No face - quick loop, minimal delay
+                        # No face - reset tracking
+                        last_face_pos = None
+                        face_stable_count = 0
                         await asyncio.sleep(0.02)
                         continue
 
                     # Process largest face
                     largest_face = max(faces, key=lambda f: f[2] * f[3])
                     face_x, face_y, face_w, face_h = largest_face
-                    logger.info(f"Face DETECTED: size={face_w}x{face_h} at ({face_x},{face_y}), detect_time={t_detect*1000:.1f}ms")
+
+                    # Check if face position is stable (same person standing still)
+                    if last_face_pos is not None:
+                        dx = abs(face_x - last_face_pos[0])
+                        dy = abs(face_y - last_face_pos[1])
+                        if dx < FACE_POSITION_TOLERANCE and dy < FACE_POSITION_TOLERANCE:
+                            face_stable_count += 1
+                        else:
+                            face_stable_count = 1  # New face position
+                    else:
+                        face_stable_count = 1
+
+                    last_face_pos = (face_x, face_y, face_w, face_h)
+
+                    # Only do expensive embedding if face is stable for N frames
+                    if face_stable_count < FACE_STABLE_THRESHOLD:
+                        logger.info(f"Face detected, waiting for stable ({face_stable_count}/{FACE_STABLE_THRESHOLD})...")
+                        await asyncio.sleep(0.1)
+                        continue
+
+                    logger.info(f"Face STABLE: size={face_w}x{face_h} at ({face_x},{face_y}), detect={t_detect*1000:.0f}ms - starting embedding...")
 
                     # Align
                     t_align_start = time.time()
@@ -454,6 +483,9 @@ class FaceAccessSystem:
 
                     if granted:
                         logger.info(f">>> Access GRANTED: {employee_id} ({display_name}) - score: {score:.3f}")
+                        # Reset face tracking after recognition
+                        face_stable_count = 0
+                        last_face_pos = None
                         # Check if lock is already unlocking (additional safety)
                         if self.lock.is_unlocking():
                             logger.debug(f"Lock already unlocking, skipping for {employee_id}")
@@ -467,6 +499,8 @@ class FaceAccessSystem:
                         await asyncio.sleep(self.config.access.cooldown_sec)
                     else:
                         logger.info(f"<<< Access DENIED: {reason} - score: {score:.3f}")
+                        # Reset tracking to try again with fresh detection
+                        face_stable_count = 0
                         # Short delay for denied attempts (lockout handles repeat prevention)
                         await asyncio.sleep(0.1)
 

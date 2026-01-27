@@ -53,3 +53,4 @@ database:
   path: "/home/pi/RPBluetooth/data/access_control.db"
 
 log_level: INFO
+
