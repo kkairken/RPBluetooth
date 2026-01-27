@@ -19,21 +19,40 @@ import numpy as np
 
 from config import load_config, SystemConfig
 
+logger = logging.getLogger(__name__)
+
 # Systemd watchdog support
 try:
     import sdnotify
     SYSTEMD_AVAILABLE = True
 except ImportError:
     SYSTEMD_AVAILABLE = False
+
 from db import Database
 from camera.usb_camera import USBCamera
 from camera.rtsp_camera import RTSPCamera
 from camera.base import CameraBase
+
+# Pi Camera support (only on Raspberry Pi)
+try:
+    from camera.picamera_camera import PiCamera
+    PICAMERA_AVAILABLE = True
+except (ImportError, RuntimeError):
+    PICAMERA_AVAILABLE = False
 from face.detector import FaceDetector
 from face.align import FaceAligner
-from face.embedder_onnx import FaceEmbedder
 from face.matcher import FaceMatcher
 from face.quality import FaceQualityChecker
+
+# Try ONNX Runtime first, fallback to OpenCV DNN (for 32-bit ARM)
+try:
+    from face.embedder_onnx import FaceEmbedder
+    ONNX_RUNTIME_AVAILABLE = True
+except ImportError:
+    ONNX_RUNTIME_AVAILABLE = False
+    from face.embedder_opencv import FaceEmbedderOpenCV as FaceEmbedder
+    logger.info("ONNX Runtime not available, using OpenCV DNN backend (32-bit compatible)")
+
 from access_control import AccessController
 from lock import LockController
 from ble_server import BLEProtocol, BLEServer
@@ -44,9 +63,7 @@ try:
     REAL_BLE_AVAILABLE = True
 except ImportError:
     REAL_BLE_AVAILABLE = False
-    logger.warning("Real BLE server not available (missing dbus/gi dependencies)")
-
-logger = logging.getLogger(__name__)
+    logger.info("Real BLE server not available (missing dbus/gi dependencies)")
 
 
 class FaceAccessSystem:
@@ -157,6 +174,17 @@ class FaceAccessSystem:
                 transport=self.config.camera.rtsp_transport,
                 width=self.config.camera.width,
                 height=self.config.camera.height
+            )
+        elif self.config.camera.type == 'picamera':
+            if not PICAMERA_AVAILABLE:
+                raise RuntimeError("picamera not available. Install with: sudo apt install python3-picamera")
+            return PiCamera(
+                width=self.config.camera.width,
+                height=self.config.camera.height,
+                fps=self.config.camera.fps,
+                rotation=self.config.camera.rotation,
+                hflip=self.config.camera.hflip,
+                vflip=self.config.camera.vflip
             )
         else:
             raise ValueError(f"Unknown camera type: {self.config.camera.type}")

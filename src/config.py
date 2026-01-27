@@ -14,13 +14,17 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CameraConfig:
     """Camera configuration."""
-    type: str  # 'usb' or 'rtsp'
+    type: str  # 'usb', 'rtsp', or 'picamera'
     device_id: Optional[int] = None  # for USB
     rtsp_url: Optional[str] = None  # for RTSP
     width: int = 640
     height: int = 480
     fps: int = 15
     rtsp_transport: str = "tcp"  # tcp or udp
+    # Pi Camera specific
+    rotation: int = 0  # 0, 90, 180, 270
+    hflip: bool = False
+    vflip: bool = False
 
 
 @dataclass
@@ -125,7 +129,10 @@ def load_config(config_path: str) -> SystemConfig:
             width=camera_data.get('width', 640),
             height=camera_data.get('height', 480),
             fps=camera_data.get('fps', 15),
-            rtsp_transport=camera_data.get('rtsp_transport', 'tcp')
+            rtsp_transport=camera_data.get('rtsp_transport', 'tcp'),
+            rotation=camera_data.get('rotation', 0),
+            hflip=camera_data.get('hflip', False),
+            vflip=camera_data.get('vflip', False)
         )
 
         # Parse face config

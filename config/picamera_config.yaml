@@ -1,14 +1,15 @@
-# Configuration for RTSP camera mode
-# Offline face access control system for Raspberry Pi 3
+# Configuration for Raspberry Pi Camera Module
+# Offline face access control system for Raspberry Pi 2
 
 # Camera configuration
 camera:
-  type: rtsp
-  rtsp_url: "rtsp://192.168.1.100:554/stream"  # RTSP stream URL
-  rtsp_transport: tcp  # tcp or udp
+  type: picamera
   width: 640
   height: 480
   fps: 15
+  rotation: 0      # 0, 90, 180, 270 degrees
+  hflip: false     # Horizontal flip
+  vflip: false     # Vertical flip
 
 # Face recognition configuration
 face:
@@ -47,16 +48,16 @@ access:
   unlock_duration_sec: 3.0
   cooldown_sec: 2.0
   max_attempts_per_minute: 10
-  granted_lockout_sec: 30.0  # Lockout after successful access (prevents repeated opens for same person)
+  granted_lockout_sec: 30.0
 
 # Lock GPIO configuration (using libgpiod)
 lock:
-  gpio_pin: 17          # Pin 11 - управление реле замка
+  gpio_pin: 17          # Pin 11 - relay control
   gpio_chip: "gpiochip0"
-  active_high: true     # true = HIGH открывает, false = LOW открывает
+  active_high: true
   mock_mode: false
-  button_pin: 27        # Pin 13 - кнопка выхода (рядом с реле)
-  button_active_low: true   # Кнопка замыкает на GND
+  button_pin: 27        # Pin 13 - exit button
+  button_active_low: true
   button_debounce_ms: 50
 
 # Database configuration
