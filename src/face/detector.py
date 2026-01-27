@@ -51,13 +51,43 @@ class FaceDetector:
     def _init_opencv_haar(self):
         """Initialize OpenCV Haar Cascade detector."""
         try:
-            cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            cascade_file = 'haarcascade_frontalface_default.xml'
+            cascade_path = None
+
+            # Try multiple locations for the cascade file
+            possible_paths = [
+                # Standard system paths (Debian/Ubuntu/Raspbian)
+                f'/usr/share/opencv4/haarcascades/{cascade_file}',
+                f'/usr/share/opencv/haarcascades/{cascade_file}',
+                f'/usr/local/share/opencv4/haarcascades/{cascade_file}',
+                f'/usr/local/share/OpenCV/haarcascades/{cascade_file}',
+                # Pip installed opencv paths
+                f'/usr/lib/python3/dist-packages/cv2/data/{cascade_file}',
+            ]
+
+            # Try cv2.data first (works with pip-installed opencv)
+            if hasattr(cv2, 'data') and hasattr(cv2.data, 'haarcascades'):
+                possible_paths.insert(0, cv2.data.haarcascades + cascade_file)
+
+            # Find the first existing path
+            import os
+            for path in possible_paths:
+                if os.path.exists(path):
+                    cascade_path = path
+                    break
+
+            if cascade_path is None:
+                raise RuntimeError(
+                    f"Haar Cascade file not found. Tried: {possible_paths[:3]}... "
+                    "Install with: sudo apt install opencv-data"
+                )
+
             self.detector = cv2.CascadeClassifier(cascade_path)
 
             if self.detector.empty():
-                raise RuntimeError("Failed to load Haar Cascade")
+                raise RuntimeError(f"Failed to load Haar Cascade from {cascade_path}")
 
-            logger.info("OpenCV Haar Cascade detector initialized")
+            logger.info(f"OpenCV Haar Cascade detector initialized from {cascade_path}")
 
         except Exception as e:
             logger.error(f"Failed to initialize OpenCV Haar detector: {e}")
