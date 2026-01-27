@@ -335,7 +335,8 @@ class LockController:
 
     def unlock(self, duration: Optional[float] = None):
         """
-        Unlock the door for a specified duration.
+        Unlock the door for a specified duration (non-blocking).
+        Runs in a separate thread to avoid blocking the main event loop.
         Prevents multiple simultaneous unlock calls.
 
         Args:
@@ -348,25 +349,30 @@ class LockController:
                 return
             self._is_unlocking = True
 
-        try:
-            if duration is None:
-                duration = self.unlock_duration
+        if duration is None:
+            duration = self.unlock_duration
 
-            logger.info(f"Unlocking for {duration} seconds")
+        # Run unlock in a separate thread to avoid blocking asyncio event loop
+        def _do_unlock():
+            try:
+                logger.info(f"Unlocking for {duration} seconds")
 
-            # Unlock
-            self._set_lock_state(True)
+                # Unlock
+                self._set_lock_state(True)
 
-            # Wait
-            time.sleep(duration)
+                # Wait
+                time.sleep(duration)
 
-            # Lock again
-            self._set_lock_state(False)
+                # Lock again
+                self._set_lock_state(False)
 
-            logger.info("Lock re-engaged")
-        finally:
-            with self._unlock_lock:
-                self._is_unlocking = False
+                logger.info("Lock re-engaged")
+            finally:
+                with self._unlock_lock:
+                    self._is_unlocking = False
+
+        unlock_thread = threading.Thread(target=_do_unlock, daemon=True)
+        unlock_thread.start()
 
     def lock(self):
         """Immediately lock the door."""
