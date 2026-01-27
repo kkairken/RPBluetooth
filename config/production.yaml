@@ -20,6 +20,7 @@ face:
   quality_min_face_size: 80
   quality_blur_threshold: 100.0
   align_enabled: true
+  embedder_backend: opencv  # "opencv" is faster on Raspberry Pi than "onnx"
 
 ble:
   device_name: "RP3_FaceAccess"

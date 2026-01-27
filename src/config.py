@@ -40,6 +40,7 @@ class FaceConfig:
     quality_min_face_size: int = 80
     quality_blur_threshold: float = 100.0
     align_enabled: bool = True
+    embedder_backend: str = "onnx"  # "onnx" or "opencv" - opencv may be faster on Raspberry Pi
 
 
 @dataclass
@@ -147,7 +148,8 @@ def load_config(config_path: str) -> SystemConfig:
             similarity_threshold=face_data.get('similarity_threshold', 0.6),
             quality_min_face_size=face_data.get('quality_min_face_size', 80),
             quality_blur_threshold=face_data.get('quality_blur_threshold', 100.0),
-            align_enabled=face_data.get('align_enabled', True)
+            align_enabled=face_data.get('align_enabled', True),
+            embedder_backend=face_data.get('embedder_backend', 'onnx')
         )
 
         if not face.onnx_model_path:

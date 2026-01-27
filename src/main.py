@@ -44,14 +44,31 @@ from face.align import FaceAligner
 from face.matcher import FaceMatcher
 from face.quality import FaceQualityChecker
 
-# Try ONNX Runtime first, fallback to OpenCV DNN (for 32-bit ARM)
+# Import both embedders for config-based selection
+ONNX_RUNTIME_AVAILABLE = False
+OPENCV_DNN_AVAILABLE = False
+
 try:
-    from face.embedder_onnx import FaceEmbedder
+    from face.embedder_onnx import FaceEmbedder as FaceEmbedderONNX
     ONNX_RUNTIME_AVAILABLE = True
 except ImportError:
-    ONNX_RUNTIME_AVAILABLE = False
-    from face.embedder_opencv import FaceEmbedderOpenCV as FaceEmbedder
-    logger.info("ONNX Runtime not available, using OpenCV DNN backend (32-bit compatible)")
+    FaceEmbedderONNX = None
+
+try:
+    from face.embedder_opencv import FaceEmbedderOpenCV
+    OPENCV_DNN_AVAILABLE = True
+except ImportError:
+    FaceEmbedderOpenCV = None
+
+# Default fallback
+if ONNX_RUNTIME_AVAILABLE:
+    FaceEmbedder = FaceEmbedderONNX
+elif OPENCV_DNN_AVAILABLE:
+    FaceEmbedder = FaceEmbedderOpenCV
+    logger.info("ONNX Runtime not available, using OpenCV DNN backend")
+else:
+    FaceEmbedder = None
+    logger.error("No face embedder backend available!")
 
 from access_control import AccessController
 from lock import LockController
@@ -104,10 +121,7 @@ class FaceAccessSystem:
             min_face_size=config.face.detector_min_face_size
         )
         self.aligner = FaceAligner(output_size=(112, 112))
-        self.embedder = FaceEmbedder(
-            model_path=config.face.onnx_model_path,
-            embedding_dim=config.face.embedding_dim
-        )
+        self.embedder = self._init_embedder(config)
         self.matcher = FaceMatcher(similarity_threshold=config.face.similarity_threshold)
         self.quality_checker = FaceQualityChecker(
             min_face_size=config.face.quality_min_face_size,
@@ -188,6 +202,37 @@ class FaceAccessSystem:
             )
         else:
             raise ValueError(f"Unknown camera type: {self.config.camera.type}")
+
+    def _init_embedder(self, config):
+        """Initialize face embedder based on config."""
+        backend = getattr(config.face, 'embedder_backend', 'onnx')
+
+        if backend == 'opencv' and OPENCV_DNN_AVAILABLE:
+            logger.info("Using OpenCV DNN backend for face embeddings (configured)")
+            return FaceEmbedderOpenCV(
+                model_path=config.face.onnx_model_path,
+                embedding_dim=config.face.embedding_dim
+            )
+        elif backend == 'onnx' and ONNX_RUNTIME_AVAILABLE:
+            logger.info("Using ONNX Runtime backend for face embeddings")
+            return FaceEmbedderONNX(
+                model_path=config.face.onnx_model_path,
+                embedding_dim=config.face.embedding_dim
+            )
+        elif OPENCV_DNN_AVAILABLE:
+            logger.info("Falling back to OpenCV DNN backend")
+            return FaceEmbedderOpenCV(
+                model_path=config.face.onnx_model_path,
+                embedding_dim=config.face.embedding_dim
+            )
+        elif ONNX_RUNTIME_AVAILABLE:
+            logger.info("Falling back to ONNX Runtime backend")
+            return FaceEmbedderONNX(
+                model_path=config.face.onnx_model_path,
+                embedding_dim=config.face.embedding_dim
+            )
+        else:
+            raise RuntimeError("No face embedder backend available!")
 
     def process_registration_photos(self, session: dict) -> dict:
         """
