@@ -112,19 +112,17 @@ class RTSPCamera(CameraBase):
             return False, None
 
         try:
-            # Flush buffer by grabbing frames without decoding
-            # This discards old buffered frames to get the latest
+            # Flush old buffered frames to reduce latency
+            # grab() is fast - just captures without decoding
             for _ in range(self.buffer_flush_count):
-                self.cap.grab()
+                if not self.cap.grab():
+                    break
 
-            # Now retrieve the latest frame
-            ret, frame = self.cap.retrieve()
+            # Read the latest frame
+            ret, frame = self.cap.read()
             if not ret or frame is None:
-                # Fallback to regular read
-                ret, frame = self.cap.read()
-                if not ret or frame is None:
-                    logger.warning("Failed to read frame from RTSP stream")
-                    return False, None
+                logger.warning("Failed to read frame from RTSP stream")
+                return False, None
 
             # Resize if needed
             if frame.shape[1] != self.width or frame.shape[0] != self.height:

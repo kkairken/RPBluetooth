@@ -173,7 +173,8 @@ class FaceAccessSystem:
                 rtsp_url=self.config.camera.rtsp_url,
                 transport=self.config.camera.rtsp_transport,
                 width=self.config.camera.width,
-                height=self.config.camera.height
+                height=self.config.camera.height,
+                buffer_flush_count=2  # Reduced for faster response
             )
         elif self.config.camera.type == 'picamera':
             if not PICAMERA_AVAILABLE:
@@ -308,8 +309,6 @@ class FaceAccessSystem:
             raise RuntimeError("Failed to open camera after multiple attempts")
 
         try:
-            frame_skip = 2  # Process every Nth frame
-            frame_count = 0
             consecutive_frame_errors = 0
             max_frame_errors = 30  # ~3 seconds at 10fps
 
@@ -326,21 +325,17 @@ class FaceAccessSystem:
                             if not self.camera.open():
                                 raise RuntimeError("Failed to reopen camera")
                             consecutive_frame_errors = 0
-                        await asyncio.sleep(0.1)
+                        await asyncio.sleep(0.05)
                         continue
 
                     consecutive_frame_errors = 0  # Reset on success
-                    frame_count += 1
-
-                    if frame_count % frame_skip != 0:
-                        await asyncio.sleep(0.01)
-                        continue
 
                     # Detect faces
                     faces = self.detector.detect(frame)
 
                     if not faces:
-                        await asyncio.sleep(0.1)
+                        # No face - quick loop, minimal delay
+                        await asyncio.sleep(0.02)
                         continue
 
                     # Process largest face
@@ -401,11 +396,12 @@ class FaceAccessSystem:
                                 self.lock.unlock()
                             except Exception as lock_err:
                                 logger.error(f"Failed to unlock: {lock_err}")
+                        # Cooldown only after successful grant
+                        await asyncio.sleep(self.config.access.cooldown_sec)
                     else:
                         logger.debug(f"Access DENIED: {reason} - score: {score:.3f}")
-
-                    # Cooldown
-                    await asyncio.sleep(self.config.access.cooldown_sec)
+                        # Short delay for denied attempts (lockout handles repeat prevention)
+                        await asyncio.sleep(0.1)
 
                 except asyncio.CancelledError:
                     raise
