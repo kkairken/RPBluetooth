@@ -36,6 +36,9 @@ class FaceConfig:
     detector_min_neighbors: int = 5
     detector_min_face_size: Tuple[int, int] = (60, 60)
     embedding_dim: int = 512
+    input_size: Tuple[int, int] = (112, 112)
+    norm_mean: float = 127.5
+    norm_std: float = 127.5
     similarity_threshold: float = 0.6  # cosine similarity threshold
     quality_min_face_size: int = 80
     quality_blur_threshold: float = 100.0
@@ -145,6 +148,9 @@ def load_config(config_path: str) -> SystemConfig:
             detector_min_neighbors=face_data.get('detector_min_neighbors', 5),
             detector_min_face_size=tuple(face_data.get('detector_min_face_size', [60, 60])),
             embedding_dim=face_data.get('embedding_dim', 512),
+            input_size=tuple(face_data.get('input_size', [112, 112])),
+            norm_mean=face_data.get('norm_mean', 127.5),
+            norm_std=face_data.get('norm_std', 127.5),
             similarity_threshold=face_data.get('similarity_threshold', 0.6),
             quality_min_face_size=face_data.get('quality_min_face_size', 80),
             quality_blur_threshold=face_data.get('quality_blur_threshold', 100.0),

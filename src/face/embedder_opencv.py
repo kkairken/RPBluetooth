@@ -18,7 +18,9 @@ class FaceEmbedderOpenCV:
         self,
         model_path: str,
         embedding_dim: int = 512,
-        input_size: Tuple[int, int] = (112, 112)
+        input_size: Tuple[int, int] = (112, 112),
+        norm_mean: float = 127.5,
+        norm_std: float = 127.5
     ):
         """
         Initialize face embedder with OpenCV DNN.
@@ -27,10 +29,14 @@ class FaceEmbedderOpenCV:
             model_path: Path to ONNX model file
             embedding_dim: Expected embedding dimension
             input_size: Model input size (width, height)
+            norm_mean: Normalization mean (subtracted from pixel values)
+            norm_std: Normalization std (divides centered pixel values)
         """
         self.model_path = model_path
         self.embedding_dim = embedding_dim
         self.input_size = input_size
+        self.norm_mean = norm_mean
+        self.norm_std = norm_std
         self.net = None
 
         self._load_model()
@@ -75,14 +81,12 @@ class FaceEmbedderOpenCV:
         # Convert BGR to RGB
         face_rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
 
-        # Create blob: normalize to [-1, 1] (standard for InsightFace)
-        # blobFromImage does: (image - mean) * scalefactor
-        # We want: (pixel - 127.5) / 127.5 = pixel * (1/127.5) - 1
+        # Create blob: (image - mean) * scalefactor
         blob = cv2.dnn.blobFromImage(
             face_rgb,
-            scalefactor=1.0 / 127.5,
+            scalefactor=1.0 / self.norm_std,
             size=self.input_size,
-            mean=(127.5, 127.5, 127.5),
+            mean=(self.norm_mean, self.norm_mean, self.norm_mean),
             swapRB=False,  # Already RGB
             crop=False
         )

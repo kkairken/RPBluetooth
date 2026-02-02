@@ -120,7 +120,7 @@ class FaceAccessSystem:
             min_neighbors=config.face.detector_min_neighbors,
             min_face_size=config.face.detector_min_face_size
         )
-        self.aligner = FaceAligner(output_size=(112, 112))
+        self.aligner = FaceAligner(output_size=config.face.input_size)
         self.embedder = self._init_embedder(config)
         self.matcher = FaceMatcher(similarity_threshold=config.face.similarity_threshold)
         self.quality_checker = FaceQualityChecker(
@@ -207,30 +207,26 @@ class FaceAccessSystem:
         """Initialize face embedder based on config."""
         backend = getattr(config.face, 'embedder_backend', 'onnx')
 
+        embedder_kwargs = dict(
+            model_path=config.face.onnx_model_path,
+            embedding_dim=config.face.embedding_dim,
+            input_size=config.face.input_size,
+            norm_mean=config.face.norm_mean,
+            norm_std=config.face.norm_std
+        )
+
         if backend == 'opencv' and OPENCV_DNN_AVAILABLE:
             logger.info("Using OpenCV DNN backend for face embeddings (configured)")
-            return FaceEmbedderOpenCV(
-                model_path=config.face.onnx_model_path,
-                embedding_dim=config.face.embedding_dim
-            )
+            return FaceEmbedderOpenCV(**embedder_kwargs)
         elif backend == 'onnx' and ONNX_RUNTIME_AVAILABLE:
             logger.info("Using ONNX Runtime backend for face embeddings")
-            return FaceEmbedderONNX(
-                model_path=config.face.onnx_model_path,
-                embedding_dim=config.face.embedding_dim
-            )
+            return FaceEmbedderONNX(**embedder_kwargs)
         elif OPENCV_DNN_AVAILABLE:
             logger.info("Falling back to OpenCV DNN backend")
-            return FaceEmbedderOpenCV(
-                model_path=config.face.onnx_model_path,
-                embedding_dim=config.face.embedding_dim
-            )
+            return FaceEmbedderOpenCV(**embedder_kwargs)
         elif ONNX_RUNTIME_AVAILABLE:
             logger.info("Falling back to ONNX Runtime backend")
-            return FaceEmbedderONNX(
-                model_path=config.face.onnx_model_path,
-                embedding_dim=config.face.embedding_dim
-            )
+            return FaceEmbedderONNX(**embedder_kwargs)
         else:
             raise RuntimeError("No face embedder backend available!")
 

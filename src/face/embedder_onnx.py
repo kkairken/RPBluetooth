@@ -19,7 +19,9 @@ class FaceEmbedder:
         self,
         model_path: str,
         embedding_dim: int = 512,
-        input_size: Tuple[int, int] = (112, 112)
+        input_size: Tuple[int, int] = (112, 112),
+        norm_mean: float = 127.5,
+        norm_std: float = 127.5
     ):
         """
         Initialize face embedder.
@@ -28,10 +30,14 @@ class FaceEmbedder:
             model_path: Path to ONNX model file
             embedding_dim: Expected embedding dimension
             input_size: Model input size (width, height)
+            norm_mean: Normalization mean (subtracted from pixel values)
+            norm_std: Normalization std (divides centered pixel values)
         """
         self.model_path = model_path
         self.embedding_dim = embedding_dim
         self.input_size = input_size
+        self.norm_mean = norm_mean
+        self.norm_std = norm_std
         self.session: Optional[ort.InferenceSession] = None
 
         self._load_model()
@@ -97,8 +103,8 @@ class FaceEmbedder:
         # Convert BGR to RGB
         face_rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
 
-        # Normalize to [-1, 1] (standard for InsightFace models)
-        face_normalized = (face_rgb.astype(np.float32) - 127.5) / 127.5
+        # Normalize: (pixel - mean) / std
+        face_normalized = (face_rgb.astype(np.float32) - self.norm_mean) / self.norm_std
 
         # Transpose to CHW format
         face_transposed = face_normalized.transpose(2, 0, 1)
