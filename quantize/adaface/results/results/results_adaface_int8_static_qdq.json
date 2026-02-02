@@ -1,0 +1,15 @@
+{
+  "accuracy": 0.8573333333333333,
+  "threshold": 0.28202497959136963,
+  "tar_at_far_1e3": 0.314,
+  "tar_at_far_1e4": 0.25833333333333336,
+  "roc_auc": 0.9278195555555555,
+  "genuine_mean": 0.44051921367645264,
+  "genuine_std": 0.15427321195602417,
+  "impostor_mean": 0.16489572823047638,
+  "impostor_std": 0.10126492381095886,
+  "model_name": "adaface_int8_static_qdq.onnx",
+  "model_size_mb": 42.073081970214844,
+  "inference_latency_ms": 19.950880000251345,
+  "throughput_fps": 50.12310233871397
+}

@@ -1,0 +1,32 @@
+{
+  "fp32": {
+    "accuracy": 0.929,
+    "threshold": 0.21855628490447998,
+    "tar_at_far_1e3": 0.624,
+    "tar_at_far_1e4": 0.624,
+    "roc_auc": 0.97556,
+    "genuine_mean": 0.46189385652542114,
+    "genuine_std": 0.15173201262950897,
+    "impostor_mean": 0.09697011113166809,
+    "impostor_std": 0.08310260623693466,
+    "model_name": "insightface_fp32.onnx",
+    "model_size_mb": 166.3054084777832,
+    "inference_latency_ms": 42.304102999623865,
+    "throughput_fps": 23.63836907282708
+  },
+  "int8": {
+    "accuracy": 0.919,
+    "threshold": 0.25232309103012085,
+    "tar_at_far_1e3": 0.626,
+    "tar_at_far_1e4": 0.626,
+    "roc_auc": 0.973384,
+    "genuine_mean": 0.45075318217277527,
+    "genuine_std": 0.14249637722969055,
+    "impostor_mean": 0.11479449272155762,
+    "impostor_std": 0.0857425183057785,
+    "model_name": "insightface_int8_qdq.onnx",
+    "model_size_mb": 41.775259017944336,
+    "inference_latency_ms": 38.230559999356046,
+    "throughput_fps": 26.15708480380209
+  }
+}

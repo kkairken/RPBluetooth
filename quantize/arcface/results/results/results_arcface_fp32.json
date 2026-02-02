@@ -1,0 +1,15 @@
+{
+  "accuracy": 0.94,
+  "threshold": 0.23744794726371765,
+  "tar_at_far_1e3": 0.765,
+  "tar_at_far_1e4": 0.6926666666666667,
+  "roc_auc": 0.9798712222222221,
+  "genuine_mean": 0.4524739682674408,
+  "genuine_std": 0.15194962918758392,
+  "impostor_mean": 0.0884568989276886,
+  "impostor_std": 0.07768147438764572,
+  "model_name": "arcface_fp32.onnx",
+  "model_size_mb": 166.3054084777832,
+  "inference_latency_ms": 36.85684708994813,
+  "throughput_fps": 27.132000671666983
+}

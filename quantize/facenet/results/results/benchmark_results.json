@@ -1,0 +1,53 @@
+{
+  "facenet_fp32.onnx": {
+    "model_name": "facenet_fp32.onnx",
+    "model_size_mb": 89.60651969909668,
+    "latency_mean_ms": 9.41107708698837,
+    "latency_std_ms": 1.0222929715923064,
+    "latency_min_ms": 6.971125025302172,
+    "latency_max_ms": 13.575749995652586,
+    "latency_p50_ms": 8.976416516816244,
+    "latency_p95_ms": 11.797527395538053,
+    "latency_p99_ms": 12.286473398562519,
+    "throughput_fps": 93.3378716685139,
+    "batch_size": 32,
+    "execution_provider": "CPUExecutionProvider",
+    "num_threads": 4,
+    "warmup_iterations": 50,
+    "measure_iterations": 200
+  },
+  "facenet_int8_dynamic.onnx": {
+    "model_name": "facenet_int8_dynamic.onnx",
+    "model_size_mb": 86.96625804901123,
+    "latency_mean_ms": 8.240020862140227,
+    "latency_std_ms": 1.408203890967885,
+    "latency_min_ms": 7.010166998952627,
+    "latency_max_ms": 11.638166033662856,
+    "latency_p50_ms": 7.391582999844104,
+    "latency_p95_ms": 11.122108646668492,
+    "latency_p99_ms": 11.516528359497897,
+    "throughput_fps": 93.18242063426254,
+    "batch_size": 32,
+    "execution_provider": "CPUExecutionProvider",
+    "num_threads": 4,
+    "warmup_iterations": 50,
+    "measure_iterations": 200
+  },
+  "facenet_int8_static_qdq.onnx": {
+    "model_name": "facenet_int8_static_qdq.onnx",
+    "model_size_mb": 23.25980567932129,
+    "latency_mean_ms": 4.447598357510287,
+    "latency_std_ms": 0.3550586233254761,
+    "latency_min_ms": 3.8920000079087913,
+    "latency_max_ms": 6.069957977160811,
+    "latency_p50_ms": 4.329687508288771,
+    "latency_p95_ms": 5.23737880284898,
+    "latency_p99_ms": 5.732725046109407,
+    "throughput_fps": 276.8525373658335,
+    "batch_size": 32,
+    "execution_provider": "CPUExecutionProvider",
+    "num_threads": 4,
+    "warmup_iterations": 50,
+    "measure_iterations": 200
+  }
+}

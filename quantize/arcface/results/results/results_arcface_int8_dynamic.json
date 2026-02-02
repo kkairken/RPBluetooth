@@ -1,0 +1,15 @@
+{
+  "accuracy": 0.9375,
+  "threshold": 0.2427486777305603,
+  "tar_at_far_1e3": 0.751,
+  "tar_at_far_1e4": 0.7156666666666667,
+  "roc_auc": 0.9789605555555555,
+  "genuine_mean": 0.4557223320007324,
+  "genuine_std": 0.15040786564350128,
+  "impostor_mean": 0.09636027365922928,
+  "impostor_std": 0.07960980385541916,
+  "model_name": "arcface_int8_dynamic.onnx",
+  "model_size_mb": 41.762619972229004,
+  "inference_latency_ms": 125.67655416962225,
+  "throughput_fps": 7.956933627017869
+}

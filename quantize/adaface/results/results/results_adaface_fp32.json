@@ -1,0 +1,15 @@
+{
+  "accuracy": 0.8895,
+  "threshold": 0.2577495872974396,
+  "tar_at_far_1e3": 0.4593333333333333,
+  "tar_at_far_1e4": 0.335,
+  "roc_auc": 0.9508304444444444,
+  "genuine_mean": 0.44741272926330566,
+  "genuine_std": 0.16102424263954163,
+  "impostor_mean": 0.13074250519275665,
+  "impostor_std": 0.09334394335746765,
+  "model_name": "adaface_fp32.onnx",
+  "model_size_mb": 166.31920051574707,
+  "inference_latency_ms": 34.53510166029446,
+  "throughput_fps": 28.956046223246403
+}

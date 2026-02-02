@@ -36,7 +36,23 @@ ENV/
 data/*.db
 data/*.db-journal
 *.log
+models/
 models/*.onnx
+**/*.onnx
+**/*.ckpt
+**/*.pth
+**/*.pt
+**/*.h5
+**/*.tflite
+**/*.pb
+**/*.pbtxt
+**/*.weights
+**/*.params
+**/*.bin
+**/*.engine
+**/*.mlmodel
+**/*.mlpackage
+**/*.safetensors
 config/my_config.yaml
 config/*_local.yaml
 

@@ -1,0 +1,15 @@
+{
+  "accuracy": 0.9676666666666667,
+  "threshold": 0.3488981028397877,
+  "tar_at_far_1e3": 0.7893333333333333,
+  "tar_at_far_1e4": 0.778,
+  "roc_auc": 0.9923798888888888,
+  "genuine_mean": 0.6742876172065735,
+  "genuine_std": 0.15467382967472076,
+  "impostor_mean": 0.05012182518839836,
+  "impostor_std": 0.15617001056671143,
+  "model_name": "facenet_int8_static_qdq.onnx",
+  "model_size_mb": 23.25980567932129,
+  "inference_latency_ms": 3.9214316703146324,
+  "throughput_fps": 255.008905948823
+}
