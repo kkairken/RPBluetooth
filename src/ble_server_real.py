@@ -413,6 +413,24 @@ class CommandCharacteristic(Characteristic):
             else:
                 return {'type': 'ERROR', 'message': 'Callback not set'}
 
+        elif command_type == self.protocol.CMD_LIST_EMPLOYEES:
+            if hasattr(self, 'list_employees_callback'):
+                return self.protocol.handle_list_employees(self.list_employees_callback)
+            else:
+                return {'type': 'ERROR', 'message': 'Callback not set'}
+
+        elif command_type == self.protocol.CMD_GET_AUDIT_LOGS:
+            if hasattr(self, 'audit_logs_callback'):
+                return self.protocol.handle_get_audit_logs(command, self.audit_logs_callback)
+            else:
+                return {'type': 'ERROR', 'message': 'Callback not set'}
+
+        elif command_type == self.protocol.CMD_DELETE:
+            if hasattr(self, 'delete_callback'):
+                return self.protocol.handle_delete(command, self.delete_callback)
+            else:
+                return {'type': 'ERROR', 'message': 'Callback not set'}
+
         else:
             return {'type': 'ERROR', 'message': f'Unknown command: {command_type}'}
 
@@ -662,12 +680,21 @@ class RealBLEServer:
                      end_upsert_cb: Callable,
                      update_period_cb: Callable,
                      deactivate_cb: Callable,
-                     status_cb: Callable):
+                     status_cb: Callable,
+                     list_employees_cb: Callable = None,
+                     audit_logs_cb: Callable = None,
+                     delete_cb: Callable = None):
         """Set callback functions for command handling"""
         self.command_chrc.end_upsert_callback = end_upsert_cb
         self.command_chrc.update_period_callback = update_period_cb
         self.command_chrc.deactivate_callback = deactivate_cb
         self.command_chrc.status_callback = status_cb
+        if list_employees_cb:
+            self.command_chrc.list_employees_callback = list_employees_cb
+        if audit_logs_cb:
+            self.command_chrc.audit_logs_callback = audit_logs_cb
+        if delete_cb:
+            self.command_chrc.delete_callback = delete_cb
 
     def register_app_cb(self):
         logger.info('GATT application registered')

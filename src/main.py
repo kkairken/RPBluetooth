@@ -161,7 +161,10 @@ class FaceAccessSystem:
                 end_upsert_cb=self.process_registration_photos,
                 update_period_cb=self.update_period_callback,
                 deactivate_cb=self.deactivate_callback,
-                status_cb=self.get_status_callback
+                status_cb=self.get_status_callback,
+                list_employees_cb=self.list_employees_callback,
+                audit_logs_cb=self.audit_logs_callback,
+                delete_cb=self.delete_callback
             )
         else:
             if use_real_ble and not REAL_BLE_AVAILABLE:
@@ -333,6 +336,36 @@ class FaceAccessSystem:
     def get_status_callback(self) -> dict:
         """Callback for getting system status."""
         return self.db.get_system_status()
+
+    def list_employees_callback(self) -> list:
+        """Callback for listing all employees with embedding counts."""
+        cursor = self.db.conn.cursor()
+        cursor.execute("""
+            SELECT e.employee_id, e.display_name, e.is_active,
+                   e.access_start, e.access_end,
+                   (SELECT COUNT(*) FROM embeddings WHERE employee_id = e.employee_id) as emb_count
+            FROM employees e
+            ORDER BY e.display_name
+        """)
+        result = []
+        for row in cursor.fetchall():
+            result.append({
+                'employee_id': row[0],
+                'display_name': row[1] or row[0],
+                'is_active': bool(row[2]),
+                'access_start': row[3],
+                'access_end': row[4],
+                'embedding_count': row[5]
+            })
+        return result
+
+    def audit_logs_callback(self, employee_id=None, limit=100) -> list:
+        """Callback for getting audit logs."""
+        return self.db.get_audit_logs(employee_id=employee_id, limit=limit)
+
+    def delete_callback(self, employee_id: str) -> bool:
+        """Callback for deleting an employee."""
+        return self.db.delete_employee(employee_id)
 
     async def recognition_loop(self):
         """Main face recognition loop with error recovery."""

@@ -27,12 +27,16 @@ class BLEProtocol:
     CMD_DEACTIVATE = "DEACTIVATE"
     CMD_DELETE = "DELETE"
     CMD_GET_STATUS = "GET_STATUS"
+    CMD_LIST_EMPLOYEES = "LIST_EMPLOYEES"
+    CMD_GET_AUDIT_LOGS = "GET_AUDIT_LOGS"
 
     # Response types
     RESP_OK = "OK"
     RESP_ERROR = "ERROR"
     RESP_PROGRESS = "PROGRESS"
     RESP_STATUS = "STATUS"
+    RESP_EMPLOYEES = "EMPLOYEES"
+    RESP_AUDIT_LOGS = "AUDIT_LOGS"
 
     def __init__(
         self,
@@ -417,6 +421,91 @@ class BLEProtocol:
 
         except Exception as e:
             logger.error(f"GET_STATUS error: {e}")
+            return {'type': self.RESP_ERROR, 'message': str(e)}
+
+    def handle_list_employees(
+        self,
+        callback: Callable[[], list]
+    ) -> Dict[str, Any]:
+        """
+        Handle LIST_EMPLOYEES command. No HMAC, no admin check.
+
+        Args:
+            callback: Callback function returning list of employee dicts
+
+        Returns:
+            Response dictionary
+        """
+        try:
+            employees = callback()
+            return {'type': self.RESP_EMPLOYEES, 'data': employees}
+
+        except Exception as e:
+            logger.error(f"LIST_EMPLOYEES error: {e}")
+            return {'type': self.RESP_ERROR, 'message': str(e)}
+
+    def handle_get_audit_logs(
+        self,
+        command: Dict[str, Any],
+        callback: Callable
+    ) -> Dict[str, Any]:
+        """
+        Handle GET_AUDIT_LOGS command. No HMAC.
+
+        Args:
+            command: Command dictionary with optional employee_id and limit
+            callback: Callback function returning list of audit log dicts
+
+        Returns:
+            Response dictionary
+        """
+        try:
+            employee_id = command.get('employee_id')
+            limit = command.get('limit', 100)
+
+            logs = callback(employee_id=employee_id, limit=limit)
+            return {'type': self.RESP_AUDIT_LOGS, 'data': logs}
+
+        except Exception as e:
+            logger.error(f"GET_AUDIT_LOGS error: {e}")
+            return {'type': self.RESP_ERROR, 'message': str(e)}
+
+    def handle_delete(
+        self,
+        command: Dict[str, Any],
+        callback: Callable[[str], bool]
+    ) -> Dict[str, Any]:
+        """
+        Handle DELETE command. Requires admin check + HMAC.
+
+        Args:
+            command: Command dictionary
+            callback: Callback function to delete employee
+
+        Returns:
+            Response dictionary
+        """
+        try:
+            if not self.check_admin_permission():
+                return {'type': self.RESP_ERROR, 'message': 'Admin mode not enabled'}
+
+            if not self.verify_hmac(command):
+                return {'type': self.RESP_ERROR, 'message': 'HMAC verification failed'}
+
+            employee_id = command.get('employee_id')
+
+            if not employee_id:
+                return {'type': self.RESP_ERROR, 'message': 'Missing employee_id'}
+
+            success = callback(employee_id)
+
+            if success:
+                return {'type': self.RESP_OK, 'message': f'Employee {employee_id} deleted'}
+            else:
+                return {'type': self.RESP_ERROR, 'message': 'Employee not found'}
+
+        except Exception as e:
+            logger.error(f"DELETE error: {e}")
             return {'type': self.RESP_ERROR, 'message': str(e)}
 
 
