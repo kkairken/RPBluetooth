@@ -46,11 +46,11 @@ class FaceEmbedder:
             session_options = ort.SessionOptions()
             session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-            # Optimize for Raspberry Pi - use all available cores
+            # Limit threads to avoid power issues on SBCs (Orange Pi 5, RPi, etc.)
             import os
-            num_cores = os.cpu_count() or 4
+            num_cores = min(os.cpu_count() or 4, 4)  # Cap at 4 threads
             session_options.intra_op_num_threads = num_cores
-            session_options.inter_op_num_threads = num_cores
+            session_options.inter_op_num_threads = 1
             session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 
             logger.info(f"ONNX Runtime using {num_cores} threads")
