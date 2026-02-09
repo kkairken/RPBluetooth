@@ -81,3 +81,4 @@ AdaFace:
 - Вход: 112x112, BGR, NCHW
 - Нормализация: (pixel - 127.5) / 127.5
 
+Ссылка на все модели: https://drive.google.com/drive/folders/1l62TUUUB0rqVxtPc245avaWF8UbQ93YN?usp=sharing
