@@ -6,7 +6,7 @@ Wants=network-online.target bluetooth.target
 [Service]
 Type=notify
 WorkingDirectory=/root/RPBluetooth
-ExecStart=/root/RPBluetooth/.venv/bin/python src/main.py --config config/production.yaml
+ExecStart=/root/RPBluetooth/venv312/bin/python src/main.py --config config/production.yaml
 Restart=on-failure
 RestartSec=5
 WatchdogSec=60
