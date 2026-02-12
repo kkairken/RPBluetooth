@@ -3,8 +3,12 @@
 
 camera:
   type: rtsp
-  rtsp_url: "rtsp://admin:129510@192.168.1.33:554/stream"  # RTSP stream URL
-  rtsp_transport: tcp  # tcp or udp
+  rtsp_url: "auto"                # auto-discover camera IP on Ethernet subnet
+  rtsp_transport: tcp             # tcp or udp
+  rtsp_username: "admin"
+  rtsp_password: "129510"
+  rtsp_port: 554
+  rtsp_path: "/stream"
   width: 640
   height: 480
   fps: 15

@@ -32,6 +32,7 @@ from db import Database
 from camera.usb_camera import USBCamera
 from camera.rtsp_camera import RTSPCamera
 from camera.base import CameraBase
+from camera.discover import discover_rtsp_camera
 
 # Pi Camera support (only on Raspberry Pi)
 try:
@@ -184,10 +185,13 @@ class FaceAccessSystem:
                 fps=self.config.camera.fps
             )
         elif self.config.camera.type == 'rtsp':
-            if not self.config.camera.rtsp_url:
+            rtsp_url = self.config.camera.rtsp_url
+            if not rtsp_url:
                 raise ValueError("RTSP URL required for RTSP camera")
+            if rtsp_url == "auto":
+                rtsp_url = self._discover_camera_url()
             return RTSPCamera(
-                rtsp_url=self.config.camera.rtsp_url,
+                rtsp_url=rtsp_url,
                 transport=self.config.camera.rtsp_transport,
                 width=self.config.camera.width,
                 height=self.config.camera.height
@@ -205,6 +209,21 @@ class FaceAccessSystem:
             )
         else:
             raise ValueError(f"Unknown camera type: {self.config.camera.type}")
+
+    def _discover_camera_url(self) -> str:
+        """Discover RTSP camera on the network and build URL."""
+        cam = self.config.camera
+        logger.info("RTSP URL set to 'auto', discovering camera on network...")
+        ip = discover_rtsp_camera(port=cam.rtsp_port)
+        # Build URL from discovered IP and config credentials
+        userinfo = ""
+        if cam.rtsp_username and cam.rtsp_password:
+            userinfo = f"{cam.rtsp_username}:{cam.rtsp_password}@"
+        elif cam.rtsp_username:
+            userinfo = f"{cam.rtsp_username}@"
+        url = f"rtsp://{userinfo}{ip}:{cam.rtsp_port}{cam.rtsp_path}"
+        logger.info(f"Discovered camera at {ip}, using URL: rtsp://{userinfo}{ip}:{cam.rtsp_port}{cam.rtsp_path}")
+        return url
 
     def _init_embedder(self, config):
         """Initialize face embedder based on config."""

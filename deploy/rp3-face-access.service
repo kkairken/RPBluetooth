@@ -1,0 +1,19 @@
+[Unit]
+Description=RP3 Face Access Control System
+After=network-online.target bluetooth.target
+Wants=network-online.target bluetooth.target
+
+[Service]
+Type=notify
+WorkingDirectory=/root/RPBluetooth
+ExecStart=/root/RPBluetooth/.venv/bin/python src/main.py --config config/production.yaml
+Restart=on-failure
+RestartSec=5
+WatchdogSec=60
+TimeoutStartSec=30
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -16,11 +16,16 @@ class CameraConfig:
     """Camera configuration."""
     type: str  # 'usb', 'rtsp', or 'picamera'
     device_id: Optional[int] = None  # for USB
-    rtsp_url: Optional[str] = None  # for RTSP
+    rtsp_url: Optional[str] = None  # for RTSP; "auto" enables auto-discovery
     width: int = 640
     height: int = 480
     fps: int = 15
     rtsp_transport: str = "tcp"  # tcp or udp
+    # RTSP auto-discovery fields (used when rtsp_url == "auto")
+    rtsp_username: Optional[str] = None
+    rtsp_password: Optional[str] = None
+    rtsp_port: int = 554
+    rtsp_path: str = "/stream"
     # Pi Camera specific
     rotation: int = 0  # 0, 90, 180, 270
     hflip: bool = False
@@ -134,6 +139,10 @@ def load_config(config_path: str) -> SystemConfig:
             height=camera_data.get('height', 480),
             fps=camera_data.get('fps', 15),
             rtsp_transport=camera_data.get('rtsp_transport', 'tcp'),
+            rtsp_username=camera_data.get('rtsp_username'),
+            rtsp_password=camera_data.get('rtsp_password'),
+            rtsp_port=camera_data.get('rtsp_port', 554),
+            rtsp_path=camera_data.get('rtsp_path', '/stream'),
             rotation=camera_data.get('rotation', 0),
             hflip=camera_data.get('hflip', False),
             vflip=camera_data.get('vflip', False)
