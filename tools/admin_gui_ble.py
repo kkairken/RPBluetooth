@@ -49,9 +49,9 @@ RESPONSE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
 # Protocol constants
 HEADER_SIZE = 3
 DEFAULT_MTU = 185
-CHUNK_SIZE = 1024
-INTER_PACKET_DELAY_MS = 80
-SLEEP_BETWEEN_CHUNKS_MS = 150
+CHUNK_SIZE = 4096  # base64 chars per PHOTO_CHUNK (~3KB raw data)
+INTER_PACKET_DELAY_MS = 10
+SLEEP_BETWEEN_CHUNKS_MS = 20
 MAX_RETRIES = 5
 DEVICE_NAME = "RP3_FaceAccess"
 
@@ -261,8 +261,8 @@ class BLEAdminClient:
                         await asyncio.sleep(0.3)
                     else:
                         return False
-            await asyncio.sleep(0.08)
-        await asyncio.sleep(0.12)
+            await asyncio.sleep(0.01)  # 10ms between BLE writes (flow control via response=True)
+        await asyncio.sleep(0.02)  # 20ms after last write
         return True
 
     # --- Command API ---
@@ -320,35 +320,17 @@ class BLEAdminClient:
             photo_b64 = base64.b64encode(photo_bytes).decode('utf-8')
             photo_hash = hashlib.sha256(photo_bytes).hexdigest()
 
-            max_payload = self._write_chunk_size - HEADER_SIZE
+            # _send_reliable() handles splitting large commands across
+            # multiple BLE writes, so chunk size is NOT limited by MTU.
+            # Max command size on server is 64KB; use CHUNK_SIZE directly.
             safe_chunk_size = CHUNK_SIZE
-            for _ in range(3):
-                total_est = max(1, math.ceil(len(photo_b64) / max(1, safe_chunk_size)))
-                overhead_cmd = {
-                    "command": "PHOTO_CHUNK",
-                    "chunk_index": total_est - 1,
-                    "total_chunks": total_est,
-                    "data": "",
-                    "is_last": True,
-                    "sha256": photo_hash
-                }
-                overhead_len = len(json.dumps(overhead_cmd, separators=(',', ':')).encode('utf-8'))
-                max_data_len = max_payload - overhead_len
-                if max_data_len < 1:
-                    return False
-                max_data_len -= (max_data_len % 4)
-                if max_data_len < 4:
-                    return False
-                if safe_chunk_size <= max_data_len:
-                    break
-                safe_chunk_size = max_data_len
-
+            # Align to 4 bytes for valid base64 boundaries
             safe_chunk_size -= (safe_chunk_size % 4)
-            if safe_chunk_size < 4:
-                return False
 
             chunks = [photo_b64[i:i+safe_chunk_size] for i in range(0, len(photo_b64), safe_chunk_size)]
             total_chunks = len(chunks)
+
+            logger.info(f"Sending photo: {len(photo_bytes)} bytes, {total_chunks} chunks of {safe_chunk_size} b64 chars")
 
             self._response_event.clear()
             self._last_response = None
@@ -368,16 +350,18 @@ class BLEAdminClient:
                 success = await self._send_reliable(command)
                 if not success:
                     return False
-                await asyncio.sleep(SLEEP_BETWEEN_CHUNKS_MS / 1000.0)
 
-            try:
-                await asyncio.wait_for(self._response_event.wait(), timeout=60.0)
-            except asyncio.TimeoutError:
-                return False
+                # Wait for server ACK before sending next chunk
+                try:
+                    await asyncio.wait_for(self._response_event.wait(), timeout=10.0)
+                    self._response_event.clear()
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout waiting for ACK on chunk {i}")
+                    return False
 
             return self._last_response and self._last_response.get('type') == 'OK'
 
-        return self._run_coro(_do(), timeout=120.0)
+        return self._run_coro(_do(), timeout=300.0)
 
     def end_upsert(self) -> bool:
         """End upsert session."""

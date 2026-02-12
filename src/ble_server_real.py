@@ -227,7 +227,7 @@ class CommandCharacteristic(Characteristic):
         Characteristic.__init__(
             self, bus, index,
             '12345678-1234-5678-1234-56789abcdef1',
-            ['write', 'write-without-response'],
+            ['write'],
             service
         )
         self.protocol = protocol

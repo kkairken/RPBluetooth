@@ -278,9 +278,13 @@ class BLEProtocol:
                     'photos_total': self.current_session['num_photos']
                 }
             else:
-                # Intermediate chunk - NO notification (rely on BLE-level ACK)
-                # This minimizes BLE traffic and prevents disconnections
-                return None
+                # Send lightweight ACK for flow control
+                # Client should wait for this before sending next chunk
+                return {
+                    'type': self.RESP_OK,
+                    'message': 'chunk_ack',
+                    'chunk_index': chunk_index
+                }
 
         except Exception as e:
             logger.error(f"PHOTO_CHUNK error: {e}")
